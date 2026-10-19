@@ -1,0 +1,56 @@
+name: echoflow
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-echoflow}
+      POSTGRES_USER: ${POSTGRES_USER:-echoflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-dev-password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build: ./backend
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://echoflow:local-dev-password@db:5432/echoflow}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://echoflow:local-dev-password@db:5432/echoflow}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173,http://127.0.0.1:5173}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  frontend:
+    build: ./frontend
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:5173:5173"
+
+volumes:
+  postgres_data:
+
