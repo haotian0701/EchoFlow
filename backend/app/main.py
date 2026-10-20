@@ -8,21 +8,17 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.articles import router as articles_router
-from app.audio import router as audio_router
-from app.config import get_settings
-from app.database import engine
-from app.errors import (
-    ApiError,
-    api_error_handler,
-    error_response,
-    validation_error_handler,
-)
-from app.jobs import router as jobs_router
-from app.logging_config import configure_logging, request_id_context
-from app.metrics import router as metrics_router
-from app.readiness import router as readiness_router
-from app.reviews import router as reviews_router
+from app.api.articles import router as articles_router
+from app.api.audio import router as audio_router
+from app.api.errors import api_error_handler, error_response, validation_error_handler
+from app.api.jobs import router as jobs_router
+from app.api.metrics import router as metrics_router
+from app.api.readiness import router as readiness_router
+from app.api.reviews import router as reviews_router
+from app.core.config import get_settings
+from app.core.errors import ApiError
+from app.core.logging import configure_logging, request_id_context
+from app.db.session import engine
 
 configure_logging()
 

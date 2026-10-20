@@ -1,9 +1,9 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
-import ContentStudio from './ContentStudio'
-import ScriptReview from './ScriptReview'
-import AudioStudio from './AudioStudio'
-import JobMonitor from './JobMonitor'
-import Dashboard from './Dashboard'
+import ContentStudio from './pages/ContentStudio'
+import ScriptReview from './pages/ScriptReview'
+import AudioStudio from './pages/AudioStudio'
+import JobMonitor from './pages/JobMonitor'
+import Dashboard from './pages/Dashboard'
 
 export default function App() {
   return <BrowserRouter>

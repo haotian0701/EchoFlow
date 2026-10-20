@@ -1,0 +1,10 @@
+# Resolve app/tests consistently from either the repository or backend directory.
+src = ["."]
+
+[lint.isort]
+# The migration directory shares its name with the external Alembic package.
+known-third-party = ["alembic"]
+
+[lint.per-file-ignores]
+# Keep the import layout of already published migration history unchanged.
+"alembic/versions/*.py" = ["I001"]

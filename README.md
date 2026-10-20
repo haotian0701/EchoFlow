@@ -116,7 +116,11 @@ New articles return `201`; duplicate content returns `200` with `duplicate: true
 
 With Python dependencies installed from `backend/requirements-dev.txt`, run `cd backend && pytest -q` and `ruff check .`. Tests use SQLite, fake storage and mocked HTTP responses; no automated test calls OpenRouter or ElevenLabs. Docker Compose is the PostgreSQL, Redis, MinIO, dispatcher, and Celery integration environment. Audio tests include approval invalidation, idempotent reuse, provider accounting, Range responses, soft deletion and upload failure without repeated synthesis.
 
-The optional `tests/test_audio_postgres.py` check uses `TEST_POSTGRES_URL` (a local PostgreSQL admin URL with CREATEDB permission). It creates a randomly named temporary database, upgrades Stage 3 data, checks concurrent creation and delivery plus foreign keys/uniqueness, then drops only that temporary database. It never migrates or drops the database named in the supplied URL. This check is skipped by default.
+The optional `backend/tests/integration/postgres/` checks use `TEST_POSTGRES_URL` (a local PostgreSQL admin URL with CREATEDB permission). They create randomly named temporary databases, test existing data upgrades, concurrent task/audio operations and database constraints, then drop only those temporary databases. They never migrate or drop the database named in the supplied URL. These checks are skipped by default.
+
+The backend is organized into `api`, `services`, `integrations`, `evaluation`, `models`, `schemas`, `db`, `core` and `tasks`. The frontend separates pages, shared components, API contracts/client and styles. See [Repository structure and test commands](docs/architecture.md) for dependency rules, entrypoints and test ownership.
+
+Full Mock acceptance is now versioned in `backend/tests/e2e/`. Install `backend/requirements-e2e.txt` and Chromium, then run `./scripts/run-e2e.ps1 -Suite all` for production/browser/crash-recovery checks. The runner uses a separate `echoflow-e2e` Compose project, blank keys and independent volumes, and cleans up only its test resources.
 
 
 

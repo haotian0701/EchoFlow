@@ -7,7 +7,7 @@ import asyncio
 
 import httpx
 
-from app.config import get_settings
+from app.core.config import get_settings
 
 
 async def run(base_url="http://127.0.0.1:8000"):

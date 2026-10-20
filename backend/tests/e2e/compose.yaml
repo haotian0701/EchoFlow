@@ -1,0 +1,67 @@
+# Always use the fixed project name echoflow-e2e, alongside the root compose.yaml.
+x-test-storage: &test-storage
+  MINIO_ENDPOINT: http://minio:9000
+  MINIO_ACCESS_KEY: echoflow
+  MINIO_SECRET_KEY: local-dev-password
+  MINIO_BUCKET: echoflow-audio-test
+  MINIO_SECURE: "false"
+
+x-test-providers: &test-providers
+  <<: *test-storage
+  DATABASE_URL: postgresql+asyncpg://echoflow:local-dev-password@db:5432/echoflow
+  CELERY_BROKER_URL: redis://redis:6379/0
+  LLM_PROVIDER: mock
+  TTS_PROVIDER: mock
+  OPENROUTER_API_KEY: ""
+  ELEVENLABS_API_KEY: ""
+
+services:
+  db:
+    environment:
+      POSTGRES_DB: echoflow
+      POSTGRES_USER: echoflow
+      POSTGRES_PASSWORD: local-dev-password
+    ports: !override
+      - "127.0.0.1:15432:5432"
+  migrate:
+    image: echoflow-migrate
+    environment:
+      DATABASE_URL: postgresql+asyncpg://echoflow:local-dev-password@db:5432/echoflow
+  api:
+    image: echoflow-api
+    environment:
+      <<: *test-providers
+      CORS_ORIGIN: http://localhost:15173,http://127.0.0.1:15173
+    ports: !override
+      - "127.0.0.1:18000:8000"
+  worker:
+    image: echoflow-worker
+    environment:
+      <<: *test-providers
+  dispatcher:
+    image: echoflow-dispatcher
+    environment:
+      DATABASE_URL: postgresql+asyncpg://echoflow:local-dev-password@db:5432/echoflow
+      CELERY_BROKER_URL: redis://redis:6379/0
+  maintenance:
+    image: echoflow-maintenance
+    environment:
+      <<: *test-storage
+      DATABASE_URL: postgresql+asyncpg://echoflow:local-dev-password@db:5432/echoflow
+  minio:
+    image: echoflow-minio
+    environment:
+      MINIO_ROOT_USER: echoflow
+      MINIO_ROOT_PASSWORD: local-dev-password
+    ports: !override
+      - "127.0.0.1:19001:9001"
+  minio-init:
+    image: echoflow-minio-init
+    environment:
+      <<: *test-storage
+  frontend:
+    image: echoflow-frontend
+    environment:
+      VITE_API_BASE_URL: http://localhost:18000
+    ports: !override
+      - "127.0.0.1:15173:5173"
