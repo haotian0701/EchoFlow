@@ -17,6 +17,11 @@ WORD_TARGETS = {
     "en": {"short": 300, "medium": 750, "long": 1350},
     "de": {"short": 260, "medium": 650, "long": 1170},
 }
+COMPLETION_TOKEN_BUDGETS = {
+    "short": 4000,
+    "medium": 6000,
+    "long": 8000,
+}
 WORDS_PER_MINUTE = {"en": 150, "de": 130}
 
 
@@ -142,6 +147,11 @@ class OpenRouterProvider:
                 {"role": "user", "content": user},
             ],
             "temperature": 0.3,
+            # The completion budget also includes hidden reasoning tokens for
+            # reasoning-capable models. Keep a bounded reserve so a short
+            # script is not cut off before its structured JSON is emitted.
+            "max_completion_tokens": COMPLETION_TOKEN_BUDGETS[config.length],
+            "reasoning_effort": "low",
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {

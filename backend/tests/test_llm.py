@@ -34,6 +34,9 @@ async def test_openrouter_structured_success():
     def handler(request):
         sent = json.loads(request.content)
         assert sent["response_format"]["type"] == "json_schema"
+        assert sent["max_completion_tokens"] == 4000
+        assert sent["reasoning_effort"] == "low"
+        assert "max_tokens" not in sent
         assert request.headers["authorization"] == "Bearer secret"
         return httpx.Response(
             200,

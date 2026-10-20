@@ -30,7 +30,7 @@ async def dispatch_once() -> int:
                     row.task_name,
                     args=[str(row.job_id)],
                     task_id=str(row.job_id),
-                    queue="script_generation",
+                    queue=row.queue_name,
                 )
                 row.status = "dispatched"
                 row.dispatch_attempts += 1

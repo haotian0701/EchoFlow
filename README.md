@@ -1,6 +1,6 @@
 # EchoFlow
 
-EchoFlow is an AI content-to-audio platform. This repository currently implements **stages 1–2: article management and asynchronous script generation**. Evaluation, review, and audio production are planned next.
+EchoFlow is an AI content-to-audio platform. This repository currently implements **stages 1–3: article management, asynchronous script generation, quality evaluation, and human approval**. Audio production is planned next.
 
 ## Run locally
 
@@ -23,11 +23,20 @@ To use OpenRouter, create `.env` from `.env.example` and set:
 LLM_PROVIDER=openrouter
 OPENROUTER_API_KEY=your-key
 OPENROUTER_MODEL=google/gemini-2.5-flash
+OPENROUTER_EVALUATION_MODEL=google/gemini-2.5-flash
 ```
 
 Restart the affected services with `docker compose up --build -d`. OpenRouter is never selected implicitly and the application never falls back to Mock when real mode fails. Keys remain in server-side environment variables and are not written to the database or logs.
 
 Generation jobs move through `queued`, `running`, `retry_scheduled`, and a terminal state of `succeeded`, `failed`, or `needs_attention`. Temporary connection, rate-limit, and availability failures receive up to three attempts. An uncertain response timeout becomes `needs_attention` because repeating it could create another billed call. Stage 2 displays that outcome; full manual recovery arrives in a later stage.
+
+## Evaluation and review
+
+Open a saved script with **Review** to use the dedicated `/review/{script-id}` workspace. Evaluation is deliberately manual: generating or editing a script leaves it in `Pending evaluation` until **Evaluate** is clicked. The asynchronous evaluation combines deterministic checks for length, narration format, sentence length, and numbers with an LLM Judge report for factual consistency, content coverage, and audio readiness.
+
+In Mock mode, `mock/evaluator-v1` produces stable scores from the deterministic findings and never calls an external service. In OpenRouter mode, the Judge uses `OPENROUTER_EVALUATION_MODEL`; it can differ from the script generation model. Scores are estimates and never approve a script automatically.
+
+Editing creates a new immutable script version and does not copy evaluations or approvals. Only the latest version can be edited or approved. Approval requires the latest evaluation attempt to have succeeded, and every critical issue must be explicitly acknowledged. Starting another evaluation preserves earlier approvals as audit history but makes them stale until the new report is approved.
 
 ## Content Studio
 
@@ -54,6 +63,12 @@ The URL importer allows HTTP/HTTPS on standard ports, checks every redirect targ
 | `GET /articles/{id}/scripts` | List immutable script versions |
 | `GET /scripts/{id}` | Get a complete script version |
 | `POST /scripts/{id}/regenerate` | Queue a new version from an existing script |
+| `PATCH /scripts/{id}` | Create an edited immutable script version |
+| `POST /scripts/{id}/evaluate` | Queue a manual quality evaluation |
+| `GET /scripts/{id}/evaluations` | List evaluation history |
+| `GET /evaluations/{id}` | Get a complete quality report |
+| `POST /scripts/{id}/approve` | Approve the latest evaluated version |
+| `GET /scripts/{id}/approvals` | List approval history |
 
 New articles return `201`; duplicate content returns `200` with `duplicate: true`. New asynchronous jobs return `202`; an idempotent replay returns the original Job. Errors use `code`, `message`, `details`, and `request_id`; `X-Request-ID` is also returned as a header.
 

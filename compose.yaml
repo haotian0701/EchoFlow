@@ -44,6 +44,7 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-google/gemini-2.5-flash}
+      OPENROUTER_EVALUATION_MODEL: ${OPENROUTER_EVALUATION_MODEL:-google/gemini-2.5-flash}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -57,13 +58,14 @@ services:
 
   worker:
     build: ./backend
-    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2", "--queues=script_generation"]
+    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2", "--queues=script_generation,script_evaluation"]
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://echoflow:local-dev-password@db:5432/echoflow}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-google/gemini-2.5-flash}
+      OPENROUTER_EVALUATION_MODEL: ${OPENROUTER_EVALUATION_MODEL:-google/gemini-2.5-flash}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
       OPENROUTER_TIMEOUT_SECONDS: ${OPENROUTER_TIMEOUT_SECONDS:-90}
       OPENROUTER_HTTP_REFERER: ${OPENROUTER_HTTP_REFERER:-http://localhost:5173}

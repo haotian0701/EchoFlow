@@ -54,13 +54,14 @@ export interface GenerationConfig {
 
 export interface ProductionJob {
   id: string
-  job_type: 'script_generation'
+  job_type: 'script_generation' | 'script_evaluation'
   article_id: string
   source_script_version_id: string | null
   result_script_version_id: string | null
+  result_evaluation_id: string | null
   status: JobStatus
   stage: string
-  config: GenerationConfig
+  config: GenerationConfig | Record<string, string>
   attempt_count: number
   max_attempts: number
   error_code: string | null
@@ -106,6 +107,62 @@ export interface JobCreateResult {
   idempotent_replay: boolean
 }
 
+export type EvaluationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'needs_attention'
+export type EvaluationDimension = 'factual_consistency' | 'content_coverage' | 'audio_readiness'
+export type IssueSeverity = 'info' | 'warning' | 'critical'
+
+export interface EvaluationIssue {
+  id: string
+  origin: 'rule' | 'judge'
+  dimension: EvaluationDimension
+  severity: IssueSeverity
+  title: string
+  explanation: string
+  script_quote: string | null
+  script_start: number | null
+  script_end: number | null
+  article_evidence_quote: string | null
+  evidence_start: number | null
+  evidence_end: number | null
+  evidence_status: 'verified' | 'insufficient' | 'not_applicable'
+}
+
+export interface EvaluationSummary {
+  id: string
+  script_version_id: string
+  job_id: string
+  status: EvaluationStatus
+  factual_consistency: number | null
+  content_coverage: number | null
+  audio_readiness: number | null
+  rule_version: string
+  provider: string | null
+  requested_model: string | null
+  actual_model: string | null
+  prompt_version: string
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+}
+
+export interface Evaluation extends EvaluationSummary {
+  issues: EvaluationIssue[]
+}
+
+export interface EvaluationCreateResult {
+  job: ProductionJob
+  evaluation: EvaluationSummary
+  idempotent_replay: boolean
+}
+
+export interface Approval {
+  id: string
+  script_version_id: string
+  evaluation_id: string
+  acknowledged_critical_issue_ids: string[]
+  created_at: string
+}
+
 interface ApiErrorBody {
   code: string
   message: string
@@ -147,7 +204,7 @@ export const api = {
       body: JSON.stringify({ type: 'script_generation', article_id: articleId, config }),
     }),
   jobs: (articleId: string) =>
-    request<Page<ProductionJob>>(`/jobs?article_id=${encodeURIComponent(articleId)}&limit=20&offset=0`),
+    request<Page<ProductionJob>>(`/jobs?article_id=${encodeURIComponent(articleId)}&type=script_generation&limit=20&offset=0`),
   job: (id: string) => request<ProductionJob>(`/jobs/${id}`),
   jobEvents: (id: string) => request<{ items: JobEvent[] }>(`/jobs/${id}/events`),
   scripts: (articleId: string) => request<Page<ScriptSummary>>(`/articles/${articleId}/scripts?limit=100&offset=0`),
@@ -158,5 +215,24 @@ export const api = {
       headers: { 'Idempotency-Key': idempotencyKey },
       body: JSON.stringify({ config }),
     }),
+  evaluations: (scriptId: string, limit = 20) =>
+    request<Page<EvaluationSummary>>(`/scripts/${scriptId}/evaluations?limit=${limit}&offset=0`),
+  evaluation: (id: string) => request<Evaluation>(`/evaluations/${id}`),
+  evaluate: (scriptId: string, idempotencyKey: string) =>
+    request<EvaluationCreateResult>(`/scripts/${scriptId}/evaluate`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+  editScript: (scriptId: string, text: string, expectedVersion: number) =>
+    request<ScriptVersion>(`/scripts/${scriptId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ text, expected_version: expectedVersion }),
+    }),
+  approvals: (scriptId: string) =>
+    request<{ items: Approval[] }>(`/scripts/${scriptId}/approvals`),
+  approve: (
+    scriptId: string,
+    body: { evaluation_id: string; expected_version: number; acknowledged_critical_issue_ids: string[] },
+  ) => request<Approval>(`/scripts/${scriptId}/approve`, { method: 'POST', body: JSON.stringify(body) }),
 }
 

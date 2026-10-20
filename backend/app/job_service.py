@@ -97,6 +97,7 @@ async def create_generation_job(
             TaskOutbox(
                 job_id=job_id,
                 task_name=TASK_NAME,
+                queue_name="script_generation",
                 status="pending",
                 available_at=datetime.now(UTC),
                 dispatch_attempts=0,

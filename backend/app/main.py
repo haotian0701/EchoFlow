@@ -17,13 +17,14 @@ from app.errors import (
     validation_error_handler,
 )
 from app.jobs import router as jobs_router
+from app.reviews import router as reviews_router
 
-app = FastAPI(title="EchoFlow API", version="0.1.0")
+app = FastAPI(title="EchoFlow API", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in get_settings().cors_origin.split(",")],
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["Content-Type", "X-Request-ID", "Idempotency-Key"],
 )
 
@@ -61,3 +62,4 @@ async def health():
 
 app.include_router(articles_router)
 app.include_router(jobs_router)
+app.include_router(reviews_router)

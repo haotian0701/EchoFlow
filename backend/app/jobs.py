@@ -48,7 +48,10 @@ async def create_job(
 async def list_jobs(
     session: SessionDep,
     article_id: UUID | None = None,
-    job_type: Annotated[Literal["script_generation"] | None, Query(alias="type")] = None,
+    job_type: Annotated[
+        Literal["script_generation", "script_evaluation"] | None,
+        Query(alias="type"),
+    ] = None,
     status: Literal["queued", "running", "retry_scheduled", "succeeded", "failed", "needs_attention"] | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,

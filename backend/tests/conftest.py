@@ -22,6 +22,7 @@ async def client():
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as test_client:
+        test_client.test_sessions = sessions
         yield test_client
     app.dependency_overrides.clear()
     await engine.dispose()
