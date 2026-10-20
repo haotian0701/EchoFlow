@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -16,11 +17,6 @@ PROMPT_VERSION = "script-generation-v1"
 WORD_TARGETS = {
     "en": {"short": 300, "medium": 750, "long": 1350},
     "de": {"short": 260, "medium": 650, "long": 1170},
-}
-COMPLETION_TOKEN_BUDGETS = {
-    "short": 4000,
-    "medium": 6000,
-    "long": 8000,
 }
 WORDS_PER_MINUTE = {"en": 150, "de": 130}
 
@@ -44,12 +40,21 @@ class GenerationResult:
 
 
 class ProviderError(Exception):
-    def __init__(self, code: str, message: str, *, retryable: bool = False, ambiguous: bool = False):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool = False,
+        ambiguous: bool = False,
+        metadata: dict | None = None,
+    ):
         super().__init__(message)
         self.code = code
         self.message = message
         self.retryable = retryable
         self.ambiguous = ambiguous
+        self.metadata = metadata or {}
 
 
 class LLMProvider(Protocol):
@@ -126,7 +131,9 @@ class MockProvider:
 class OpenRouterProvider:
     name = "openrouter"
 
-    def __init__(self, settings: Settings, transport: httpx.AsyncBaseTransport | None = None):
+    def __init__(
+        self, settings: Settings, transport: httpx.AsyncBaseTransport | None = None
+    ):
         self.settings = settings
         self.requested_model = settings.openrouter_model
         self.transport = transport
@@ -146,12 +153,14 @@ class OpenRouterProvider:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "temperature": 0.3,
+            "temperature": self.settings.generation_temperature,
             # The completion budget also includes hidden reasoning tokens for
             # reasoning-capable models. Keep a bounded reserve so a short
             # script is not cut off before its structured JSON is emitted.
-            "max_completion_tokens": COMPLETION_TOKEN_BUDGETS[config.length],
-            "reasoning_effort": "low",
+            "max_completion_tokens": getattr(
+                self.settings, f"generation_tokens_{config.length}"
+            ),
+            "reasoning_effort": self.settings.generation_reasoning_effort,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -159,7 +168,13 @@ class OpenRouterProvider:
                     "strict": True,
                     "schema": {
                         "type": "object",
-                        "properties": {"script": {"type": "string", "minLength": 100, "maxLength": 30000}},
+                        "properties": {
+                            "script": {
+                                "type": "string",
+                                "minLength": 100,
+                                "maxLength": 30000,
+                            }
+                        },
                         "required": ["script"],
                         "additionalProperties": False,
                     },
@@ -173,59 +188,121 @@ class OpenRouterProvider:
                 timeout=self.settings.openrouter_timeout_seconds,
                 transport=self.transport,
             ) as client:
-                response = await client.post("/chat/completions", headers=headers, json=payload)
+                response = await client.post(
+                    "/chat/completions", headers=headers, json=payload
+                )
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            raise ProviderError("PROVIDER_UNAVAILABLE", "Could not connect to OpenRouter", retryable=True) from exc
-        except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.RemoteProtocolError) as exc:
-            raise ProviderError("PROVIDER_RESULT_UNKNOWN", "OpenRouter did not return a definite result", ambiguous=True) from exc
+            raise ProviderError(
+                "PROVIDER_UNAVAILABLE",
+                "Could not connect to OpenRouter",
+                retryable=True,
+            ) from exc
+        except (
+            httpx.ReadTimeout,
+            httpx.WriteTimeout,
+            httpx.RemoteProtocolError,
+        ) as exc:
+            raise ProviderError(
+                "PROVIDER_RESULT_UNKNOWN",
+                "OpenRouter did not return a definite result",
+                ambiguous=True,
+            ) from exc
 
+        metadata = response_metadata(response, started)
         if response.status_code >= 400:
             message = "OpenRouter rejected the generation request"
-            try:
-                error = response.json().get("error", {})
-                if isinstance(error, dict) and error.get("message"):
-                    message = str(error["message"])
-            except (ValueError, AttributeError):
-                pass
             if response.status_code in {429, 503, 529}:
-                raise ProviderError("PROVIDER_TEMPORARY_ERROR", message, retryable=True)
+                raise ProviderError(
+                    "PROVIDER_TEMPORARY_ERROR",
+                    message,
+                    retryable=True,
+                    metadata=metadata,
+                )
             if response.status_code in {408, 500, 502, 524}:
-                raise ProviderError("PROVIDER_RESULT_UNKNOWN", message, ambiguous=True)
-            raise ProviderError("PROVIDER_REJECTED", message)
+                raise ProviderError(
+                    "PROVIDER_RESULT_UNKNOWN",
+                    message,
+                    ambiguous=True,
+                    metadata=metadata,
+                )
+            raise ProviderError("PROVIDER_REJECTED", message, metadata=metadata)
 
         try:
             data = response.json()
             choice = data["choices"][0]
             if choice.get("finish_reason") == "length":
-                raise ProviderError("LLM_OUTPUT_TRUNCATED", "The generated script was truncated")
+                raise ProviderError(
+                    "LLM_OUTPUT_TRUNCATED", "The generated script was truncated"
+                )
             content = choice["message"]["content"]
             parsed = ScriptPayload.model_validate(json.loads(content))
-        except ProviderError:
+        except ProviderError as error:
+            error.metadata = metadata
             raise
         except (ValueError, KeyError, IndexError, TypeError, ValidationError) as exc:
-            raise ProviderError("INVALID_PROVIDER_RESPONSE", "OpenRouter returned an invalid script response") from exc
+            raise ProviderError(
+                "INVALID_PROVIDER_RESPONSE",
+                "OpenRouter returned an invalid script response",
+                metadata=metadata,
+            ) from exc
 
-        usage = data.get("usage") or {}
         return GenerationResult(
             text=parsed.script,
             provider=self.name,
             requested_model=self.requested_model,
-            actual_model=str(data.get("model") or self.requested_model),
-            provider_request_id=data.get("id"),
-            prompt_tokens=usage.get("prompt_tokens"),
-            completion_tokens=usage.get("completion_tokens"),
-            total_tokens=usage.get("total_tokens"),
-            cost=usage.get("cost"),
+            actual_model=metadata.get("actual_model") or self.requested_model,
+            provider_request_id=metadata.get("provider_request_id"),
+            prompt_tokens=metadata.get("prompt_tokens"),
+            completion_tokens=metadata.get("completion_tokens"),
+            total_tokens=metadata.get("total_tokens"),
+            cost=metadata.get("cost"),
             latency_ms=round((time.monotonic() - started) * 1000),
         )
 
 
-def get_provider() -> LLMProvider:
-    settings = get_settings()
+def get_provider(settings=None) -> LLMProvider:
+    settings = settings or get_settings()
     if settings.llm_provider == "mock":
         return MockProvider()
     if settings.llm_provider == "openrouter":
         if not settings.openrouter_api_key:
-            raise ProviderError("LLM_NOT_CONFIGURED", "OpenRouter API key is not configured")
+            raise ProviderError(
+                "LLM_NOT_CONFIGURED", "OpenRouter API key is not configured"
+            )
         return OpenRouterProvider(settings)
-    raise ProviderError("LLM_PROVIDER_INVALID", f"Unsupported LLM provider: {settings.llm_provider}")
+    raise ProviderError(
+        "LLM_PROVIDER_INVALID", f"Unsupported LLM provider: {settings.llm_provider}"
+    )
+
+
+def response_metadata(response, started):
+    """Allowlist only accounting fields. Never persist an upstream error body."""
+    metadata = {"latency_ms": round((time.monotonic() - started) * 1000)}
+    try:
+        data = response.json()
+        if not isinstance(data, dict):
+            return metadata
+        for target, source in (
+            ("provider_request_id", "id"),
+            ("actual_model", "model"),
+        ):
+            if isinstance(data.get(source), str):
+                metadata[target] = data[source][:200]
+        if "provider_request_id" not in metadata and response.headers.get(
+            "x-request-id"
+        ):
+            metadata["provider_request_id"] = response.headers["x-request-id"][:200]
+        usage = data.get("usage") or {}
+        if isinstance(usage, dict):
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cost"):
+                value = usage.get(key)
+                if (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(value)
+                    and value >= 0
+                ):
+                    metadata[key] = value
+    except (ValueError, TypeError):
+        pass
+    return metadata

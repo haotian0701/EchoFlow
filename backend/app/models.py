@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -127,6 +128,16 @@ class ProductionJob(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    retry_of_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("production_jobs.id"), unique=True
+    )
+    root_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("production_jobs.id")
+    )
+    current_execution_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("job_executions.id", use_alter=True, name="fk_jobs_execution")
+    )
+    provider_snapshot: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     job_type: Mapped[str] = mapped_column(String(32), nullable=False)
     article_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("articles.id"), nullable=False
@@ -156,7 +167,10 @@ class ProductionJob(Base):
         DateTime(timezone=True), default=utc_now, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, server_default=func.now(), onupdate=utc_now
+        DateTime(timezone=True),
+        default=utc_now,
+        server_default=func.now(),
+        onupdate=utc_now,
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -214,7 +228,9 @@ class JobEvent(Base):
     event_type: Mapped[str] = mapped_column(String(40), nullable=False)
     stage: Mapped[str] = mapped_column(String(32), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
-    event_metadata: Mapped[dict] = mapped_column("metadata", JSON, default=dict, nullable=False)
+    event_metadata: Mapped[dict] = mapped_column(
+        "metadata", JSON, default=dict, nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, server_default=func.now()
     )
@@ -225,6 +241,11 @@ class ProviderCall(Base):
     __table_args__ = (Index("ix_provider_calls_job", "job_id", "created_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    execution_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("job_executions.id")
+    )
+    retryable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    uncertain: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     job_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("production_jobs.id"), nullable=False
     )
@@ -330,7 +351,10 @@ class Approval(Base):
 class AudioAsset(Base):
     __tablename__ = "audio_assets"
     __table_args__ = (
-        CheckConstraint("status IN ('available', 'deleting', 'delete_failed', 'deleted')", name="ck_audio_status"),
+        CheckConstraint(
+            "status IN ('available', 'deleting', 'delete_failed', 'deleted')",
+            name="ck_audio_status",
+        ),
         CheckConstraint("language IN ('en', 'de')", name="ck_audio_language"),
         CheckConstraint("speed >= 0.7 AND speed <= 1.2", name="ck_audio_speed"),
         Index("ux_audio_job", "job_id", unique=True),
@@ -340,7 +364,9 @@ class AudioAsset(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     article_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("articles.id"))
-    script_version_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("script_versions.id"))
+    script_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("script_versions.id")
+    )
     approval_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("approvals.id"))
     job_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("production_jobs.id"))
     provider: Mapped[str] = mapped_column(String(32))
@@ -358,14 +384,84 @@ class AudioAsset(Base):
     input_characters: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(20), default="available")
     delete_error: Mapped[str | None] = mapped_column(Text)
+    delete_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, server_default=func.now()
+    )
 
 
 class AudioRequest(Base):
     """Retain keys even when multiple requests reuse the same audio job."""
+
     __tablename__ = "audio_requests"
 
     key: Mapped[str] = mapped_column(String(128), primary_key=True)
     request_fingerprint: Mapped[str] = mapped_column(String(64))
     job_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("production_jobs.id"))
+
+
+class JobExecution(Base):
+    __tablename__ = "job_executions"
+    __table_args__ = (
+        Index("ux_execution_attempt", "job_id", "attempt_no", unique=True),
+        Index("ix_execution_lease", "status", "lease_expires_at"),
+        CheckConstraint(
+            "status IN ('running','succeeded','failed','abandoned')",
+            name="ck_execution_status",
+        ),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("production_jobs.id"))
+    attempt_no: Mapped[int] = mapped_column(Integer)
+    stage: Mapped[str] = mapped_column(String(32), default="preparing")
+    status: Mapped[str] = mapped_column(String(16), default="running")
+    heartbeat_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+    lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class JobRetryRequest(Base):
+    __tablename__ = "job_retry_requests"
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    job_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("production_jobs.id"))
+
+
+class MaintenanceHeartbeat(Base):
+    __tablename__ = "maintenance_heartbeats"
+    name: Mapped[str] = mapped_column(String(40), primary_key=True)
+    heartbeat_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+
+
+class AudioArtifact(Base):
+    __tablename__ = "audio_artifacts"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("production_jobs.id"), index=True
+    )
+    provider_call_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("provider_calls.id"), unique=True
+    )
+    approval_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("approvals.id"))
+    audio_id: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True)
+    staging_path: Mapped[str] = mapped_column(String(300))
+    object_key: Mapped[str] = mapped_column(String(200), unique=True)
+    bucket: Mapped[str] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(24), default="preparing")
+    sha256: Mapped[str | None] = mapped_column(String(64))
+    file_size: Mapped[int | None] = mapped_column(Integer)
+    duration_seconds: Mapped[float | None] = mapped_column(Numeric(12, 3))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(300))

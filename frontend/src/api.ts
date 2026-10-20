@@ -53,6 +53,17 @@ export interface GenerationConfig {
 }
 
 export interface ProductionJob {
+  article_title: string
+  retry_of_job_id: string | null
+  root_job_id: string | null
+  current_execution_id: string | null
+  provider_snapshot: Record<string, unknown>
+  can_retry: boolean
+  retry_mode: 'new_call' | 'resume_upload'
+  requires_charge_acknowledgement: boolean
+  retry_child_job_id: string | null
+  retry_unavailable_reason: string | null
+  recovery_expires_at: string | null
   id: string
   job_type: 'script_generation' | 'script_evaluation' | 'audio_generation'
   article_id: string
@@ -246,6 +257,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  monitorJobs: (params: Record<string, string>) => request<Page<ProductionJob>>(`/jobs?${new URLSearchParams(params)}`),
+  executions: (id: string, offset = 0) => request<Page<JobExecution>>(`/jobs/${id}/executions?limit=20&offset=${offset}`),
+  calls: (id: string, offset = 0) => request<Page<ProviderCall>>(`/jobs/${id}/calls?limit=20&offset=${offset}`),
+  eventsPage: (id: string, offset = 0) => request<Page<JobEvent>>(`/jobs/${id}/events?limit=20&offset=${offset}`),
+  retryJob: (id: string, acknowledge: boolean, key: string) => request<{job: ProductionJob; retry_mode: string}>(`/jobs/${id}/retry`, {
+    method: 'POST', headers: {'Idempotency-Key': key}, body: JSON.stringify({acknowledge_possible_charge: acknowledge}),
+  }),
+  metrics: (period: string) => {
+    const query = period === 'all' ? 'all_time=true' : `from=${encodeURIComponent(new Date(Date.now() - Number(period)*86400000).toISOString())}`
+    return request<Overview>(`/metrics/overview?${query}`)
+  },
   voices: (language: Language) => request<{ items: Voice[]; cached: boolean }>(`/tts/voices?language=${language}`),
   audioList: (params: { scriptId?: string; q?: string; offset?: number } = {}) => {
     const query = new URLSearchParams({ limit: '20', offset: String(params.offset ?? 0), q: params.q ?? '' })
@@ -308,3 +330,25 @@ export const api = {
   ) => request<Approval>(`/scripts/${scriptId}/approve`, { method: 'POST', body: JSON.stringify(body) }),
 }
 
+
+
+export interface JobExecution {
+  id: string; job_id: string; attempt_no: number; stage: string; status: string
+  heartbeat_at: string; lease_expires_at: string; started_at: string; completed_at: string | null
+}
+export interface ProviderCall {
+  id: string; job_id: string; execution_id: string | null; operation: string; provider: string
+  requested_model: string; actual_model: string | null; provider_request_id: string | null; status: string
+  retryable: boolean; uncertain: boolean; prompt_tokens: number | null; completion_tokens: number | null
+  total_tokens: number | null; cost: number | null; provider_credits: number | null; latency_ms: number | null
+  error_code: string | null; error_message: string | null; created_at: string; completed_at: string | null
+}
+export interface Overview {
+  total_jobs: number; status_counts: Record<JobStatus, number>; success_rate: number | null
+  manual_retry_count: number; pending_review_count: number; unresolved_needs_attention_count: number
+  active_processing: {average_seconds: number | null; sample_count: number; terminal_job_count: number}
+  provider_latency: Record<string, Record<string, {average_ms: number | null; sample_count: number}>>
+  usage: {openrouter_usd: number; elevenlabs_credits: number; unknown_cost_calls: number; mock_calls: number; total_calls: number}
+  recent_audio: {id: string; article_title: string; script_version_id: string; created_at: string}[]
+  recent_failures: {id: string; job_type: string; status: string; error_code: string | null; error_message: string | null}[]
+}

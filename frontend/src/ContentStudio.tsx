@@ -221,7 +221,7 @@ export default function ContentStudio() {
         <div className="brand-mark">E<span>◉</span></div>
         <div className="rail-divider" />
         <div className="rail-icon active" title="Content Studio" aria-label="Content Studio">▦</div>
-        <div className="rail-spacer" />
+        <Link className="rail-icon" title="Job Monitor" aria-label="Job Monitor" to="/jobs">☷</Link><Link className="rail-icon" title="Dashboard" aria-label="Dashboard" to="/dashboard">◫</Link><div className="rail-spacer" />
         <Link className="rail-icon" title="Audio Studio" aria-label="Audio Studio" to="/audio">♫</Link>
         <div className="rail-bottom">01</div>
       </aside>
@@ -320,7 +320,7 @@ export default function ContentStudio() {
               </div>
 
               {job && <div className={`job-card ${job.status}`}>
-                <div className="job-summary"><div><span className="job-label">LATEST JOB</span><strong>{job.status.replace('_', ' ')}</strong></div><span>Attempt {job.attempt_count} / {job.max_attempts}</span></div>
+                <div className="job-summary"><div><span className="job-label">LATEST JOB · <Link to={`/jobs/${job.id}`}>Details ↗</Link></span><strong>{job.status.replace('_', ' ')}</strong></div><span>Attempt {job.attempt_count} / {job.max_attempts}</span></div>
                 <div className="progress-track"><span style={{ width: job.status === 'succeeded' ? '100%' : job.status === 'running' ? '62%' : job.status === 'queued' || job.status === 'retry_scheduled' ? '25%' : '100%' }} /></div>
                 {job.error_message && <p className="job-error">{job.error_message}{job.status === 'needs_attention' ? ' A new request may create another provider charge.' : ''}</p>}
                 <div className="event-list">{jobEvents.map(event => <div key={event.id}><time>{dateTime(event.created_at)}</time><span>{event.message}</span></div>)}</div>

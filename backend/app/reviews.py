@@ -83,9 +83,7 @@ async def get_evaluation(evaluation_id: UUID, session: SessionDep):
 
 
 @router.patch("/scripts/{script_id}", response_model=ScriptDetail, status_code=201)
-async def edit_script(
-    script_id: UUID, body: ScriptEditRequest, session: SessionDep
-):
+async def edit_script(script_id: UUID, body: ScriptEditRequest, session: SessionDep):
     script = await session.get(ScriptVersion, script_id)
     if script is None:
         raise ApiError(404, "SCRIPT_NOT_FOUND", "Script version not found")
@@ -169,7 +167,9 @@ async def approve_script(
         .limit(1)
     )
     if latest_evaluation is None:
-        raise ApiError(409, "EVALUATION_REQUIRED", "Evaluate this script before approval")
+        raise ApiError(
+            409, "EVALUATION_REQUIRED", "Evaluate this script before approval"
+        )
     if latest_evaluation.status != "succeeded":
         raise ApiError(
             409,

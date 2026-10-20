@@ -18,14 +18,16 @@ from app.models import (
     ScriptVersion,
     TaskOutbox,
 )
+from app.provider_config import snapshot
 from app.tts import FORMAT, cached_voices, get_tts_provider
 
 
-async def current_approval(session, script):
+async def current_approval(session, script, *, lock=True):
     # All edits, evaluations and approvals synchronize on this article lock.
-    await session.execute(
-        select(Article).where(Article.id == script.article_id).with_for_update()
-    )
+    if lock:
+        await session.execute(
+            select(Article).where(Article.id == script.article_id).with_for_update()
+        )
     latest = await session.scalar(
         select(ScriptVersion.id)
         .where(ScriptVersion.article_id == script.article_id)
@@ -198,6 +200,7 @@ async def create_audio_job(session, script_id, body, key):
         job = ProductionJob(
             id=uuid.uuid4(),
             job_type="audio_generation",
+            provider_snapshot=snapshot("audio_generation"),
             article_id=script.article_id,
             source_script_version_id=script.id,
             config=config,
@@ -208,6 +211,7 @@ async def create_audio_job(session, script_id, body, key):
             attempt_count=0,
             max_attempts=3,
         )
+        job.root_job_id = job.id
         session.add(job)
         try:
             await session.flush()

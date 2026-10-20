@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.errors import ApiError
 from app.models import Article, JobEvent, ProductionJob, ScriptVersion, TaskOutbox
+from app.provider_config import snapshot
 from app.schemas import ScriptGenerationConfig
 
 TASK_NAME = "app.worker.generate_script_task"
@@ -23,7 +24,9 @@ def request_fingerprint(
     payload = {
         "article_id": str(article_id),
         "config": config.model_dump(mode="json"),
-        "source_script_version_id": str(source_script_version_id) if source_script_version_id else None,
+        "source_script_version_id": str(source_script_version_id)
+        if source_script_version_id
+        else None,
         "type": "script_generation",
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -40,9 +43,13 @@ async def create_generation_job(
 ) -> tuple[ProductionJob, bool]:
     settings = get_settings()
     if settings.llm_provider == "openrouter" and not settings.openrouter_api_key:
-        raise ApiError(503, "LLM_NOT_CONFIGURED", "OpenRouter API key is not configured")
+        raise ApiError(
+            503, "LLM_NOT_CONFIGURED", "OpenRouter API key is not configured"
+        )
     if settings.llm_provider not in {"mock", "openrouter"}:
-        raise ApiError(503, "LLM_NOT_CONFIGURED", "The configured LLM provider is not supported")
+        raise ApiError(
+            503, "LLM_NOT_CONFIGURED", "The configured LLM provider is not supported"
+        )
 
     article = await session.get(Article, article_id)
     if article is None:
@@ -54,7 +61,11 @@ async def create_generation_job(
 
     key = idempotency_key.strip() if idempotency_key else None
     if key is not None and (not key or len(key) > 128):
-        raise ApiError(422, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key must contain 1–128 characters")
+        raise ApiError(
+            422,
+            "INVALID_IDEMPOTENCY_KEY",
+            "Idempotency-Key must contain 1–128 characters",
+        )
     fingerprint = request_fingerprint(article_id, config, source_script_version_id)
     if key:
         existing = await session.scalar(
@@ -73,6 +84,7 @@ async def create_generation_job(
     job = ProductionJob(
         id=job_id,
         job_type="script_generation",
+        provider_snapshot=snapshot("script_generation"),
         article_id=article_id,
         source_script_version_id=source_script_version_id,
         status="queued",
@@ -83,6 +95,7 @@ async def create_generation_job(
         attempt_count=0,
         max_attempts=3,
     )
+    job.root_job_id = job.id
     session.add(job)
     await session.flush()
     session.add_all(
@@ -116,7 +129,11 @@ async def create_generation_job(
         if existing is None:
             raise
         if existing.input_fingerprint != fingerprint:
-            raise ApiError(409, "IDEMPOTENCY_CONFLICT", "The Idempotency-Key conflicts with another request")
+            raise ApiError(
+                409,
+                "IDEMPOTENCY_CONFLICT",
+                "The Idempotency-Key conflicts with another request",
+            )
         return existing, True
     await session.refresh(job)
     return job, False

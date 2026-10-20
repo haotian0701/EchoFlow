@@ -14,7 +14,14 @@ from app.audio_service import create_audio_job
 from app.database import get_session
 from app.errors import ApiError
 from app.llm import ProviderError
-from app.models import Article, AudioAsset, ProductionJob, ProviderCall, ScriptVersion
+from app.models import (
+    Article,
+    AudioArtifact,
+    AudioAsset,
+    ProductionJob,
+    ProviderCall,
+    ScriptVersion,
+)
 from app.schemas import (
     AudioCreate,
     AudioCreateResult,
@@ -135,7 +142,14 @@ async def get_audio(audio_id: UUID, session: SessionDep):
         provider_calls=(
             await session.scalars(
                 select(ProviderCall)
-                .where(ProviderCall.job_id == asset.job_id)
+                .where(
+                    (ProviderCall.job_id == asset.job_id)
+                    | ProviderCall.id.in_(
+                        select(AudioArtifact.provider_call_id).where(
+                            AudioArtifact.audio_id == asset.id
+                        )
+                    )
+                )
                 .order_by(ProviderCall.created_at)
             )
         ).all(),
@@ -252,6 +266,7 @@ async def delete_audio(audio_id: UUID, session: SessionDep, storage: StorageDep)
     if asset.status == "deleted":
         return Response(status_code=204)
     asset.status, asset.delete_error = "deleting", None
+    asset.delete_attempts = 1
     await session.commit()
     try:
         await asyncio.to_thread(storage.delete, asset.bucket, asset.object_key)

@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -22,9 +23,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.audio_worker import process_audio_job
 from app.config import Settings
 from app.database import get_session
+from app.execution import claim, fenced
 from app.main import app
-from app.models import AudioAsset, ProductionJob, ProviderCall
+from app.maintenance import recover_once
+from app.models import AudioAsset, JobExecution, ProductionJob, ProviderCall
+from app.worker import process_generation_job
 from tests.test_audio import BODY, MemoryStorage, approved_script
+from tests.test_worker import FailingProvider, seed_job
 
 
 @pytest.mark.skipif(
@@ -70,7 +75,37 @@ async def test_stage3_migration_concurrent_requests_and_duplicate_delivery(monke
                 VALUES (:id,'Before Stage 4','Test','Persisted Stage 3 article','en','manual',:hash)"""),
                 {"id": old_id, "hash": uuid.uuid4().hex.ljust(64, "0")},
             )
+        await asyncio.to_thread(migrate, "0004_audio_delivery")
+        legacy_job = uuid.uuid4()
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("""INSERT INTO production_jobs
+                (id,job_type,article_id,status,stage,config,input_fingerprint,attempt_count,max_attempts)
+                VALUES (:id,'script_generation',:article,'running','provider_call','{}',:hash,1,3)"""),
+                {"id": legacy_job, "article": old_id, "hash": "legacy"},
+            )
+            await connection.execute(
+                text("""INSERT INTO provider_calls
+                (id,job_id,operation,provider,requested_model,status)
+                VALUES (:id,:job,'script_generation','mock','mock/script-v1','running')"""),
+                {"id": uuid.uuid4(), "job": legacy_job},
+            )
         await asyncio.to_thread(migrate, "head")
+        async with engine.connect() as connection:
+            assert (
+                await connection.scalar(
+                    text("SELECT status FROM production_jobs WHERE id=:id"),
+                    {"id": legacy_job},
+                )
+                == "needs_attention"
+            )
+            assert (
+                await connection.scalar(
+                    text("SELECT status FROM provider_calls WHERE job_id=:id"),
+                    {"id": legacy_job},
+                )
+                == "unknown"
+            )
         async with engine.connect() as connection:
             assert (
                 await connection.scalar(
@@ -89,6 +124,37 @@ async def test_stage3_migration_concurrent_requests_and_duplicate_delivery(monke
             transport=httpx.ASGITransport(app), base_url="http://test"
         ) as client:
             client.test_sessions = sessions
+            _, generation_id = await seed_job(sessions)
+            claims = await asyncio.gather(
+                *[claim(sessions, generation_id, "script_generation") for _ in range(8)]
+            )
+            assert sum(value is not None for value in claims) == 1
+            execution_id = next(value for value in claims if value)
+            async with sessions() as session:
+                execution = await session.get(JobExecution, execution_id)
+                execution.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+                await session.commit()
+            await recover_once(sessions)
+            async with sessions() as session:
+                assert await fenced(session, generation_id, execution_id) is None
+            await process_generation_job(
+                generation_id, session_factory=sessions, provider=FailingProvider()
+            )
+            retry_key = str(uuid.uuid4())
+            retries = await asyncio.gather(
+                *[
+                    client.post(
+                        f"/jobs/{generation_id}/retry",
+                        json={},
+                        headers={"Idempotency-Key": retry_key},
+                    )
+                    for _ in range(8)
+                ]
+            )
+            assert sorted(result.status_code for result in retries) == [200] * 7 + [
+                202
+            ], [result.text for result in retries]
+            assert len({result.json()["job"]["id"] for result in retries}) == 1
             _, script = await approved_script(client)
             url = f"/scripts/{script.id}/audio"
             keys = [str(uuid.uuid4()) for _ in range(6)]

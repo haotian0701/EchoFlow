@@ -168,6 +168,18 @@ class ElevenLabsProvider:
         )
 
     async def synthesize(self, text, voice, language, speed, job_id, output_path):
+        started = time.monotonic()
+        self.call_metadata = {}
+        try:
+            return await self._synthesize(
+                text, voice, language, speed, job_id, output_path
+            )
+        except ProviderError as error:
+            error.metadata.update(self.call_metadata)
+            error.metadata["latency_ms"] = round((time.monotonic() - started) * 1000)
+            raise
+
+    async def _synthesize(self, text, voice, language, speed, job_id, output_path):
         # This adapter supports one explicitly verified model and its 40k limit.
         if self.model != "eleven_flash_v2_5":
             raise ProviderError(
@@ -192,6 +204,16 @@ class ElevenLabsProvider:
                             "voice_settings": {"speed": speed},
                         },
                     ) as response:
+                        self.call_metadata = {
+                            "provider_request_id": response.headers.get("request-id"),
+                            "actual_model": self.model,
+                        }
+                        try:
+                            credits = float(response.headers["character-cost"])
+                            if math.isfinite(credits) and credits >= 0:
+                                self.call_metadata["provider_credits"] = credits
+                        except (KeyError, ValueError):
+                            pass
                         check_response(response)
                         size = 0
                         with output_path.open("wb") as audio:
@@ -226,8 +248,8 @@ class ElevenLabsProvider:
             ) from exc
 
 
-def get_tts_provider() -> TTSProvider:
-    settings = get_settings()
+def get_tts_provider(settings=None) -> TTSProvider:
+    settings = settings or get_settings()
     if settings.tts_provider == "mock":
         return MockTTSProvider()
     if settings.tts_provider == "elevenlabs" and settings.elevenlabs_api_key:

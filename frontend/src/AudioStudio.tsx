@@ -142,7 +142,7 @@ export default function AudioStudio() {
       <div className="rail-divider" />
       <Link className="rail-icon" to="/" title="Content Studio" aria-label="Content Studio">▤</Link>
       <Link className="rail-icon active" to="/audio" title="Audio Studio" aria-label="Audio Studio">♫</Link>
-      <div className="rail-spacer" /><div className="rail-bottom">04</div>
+      <Link className="rail-icon" title="Job Monitor" aria-label="Job Monitor" to="/jobs">☷</Link><Link className="rail-icon" title="Dashboard" aria-label="Dashboard" to="/dashboard">◫</Link><div className="rail-spacer" /><div className="rail-bottom">04</div>
     </aside>
     <main className="main">
       <header className="topbar"><div className="brand-name">EchoFlow <span>/ Audio Studio</span></div><div className="stage-pill"><span className="stage-dot" />Stage 04 · Audio</div></header>
@@ -167,10 +167,10 @@ export default function AudioStudio() {
           <details className="audio-script"><summary>Read the approved script</summary><div className="script-body">{script.text}</div></details>
         </section>}
         {job && <section className={`card job-card audio-job ${job.status}`} aria-live="polite">
-          <div className="job-heading"><span className="job-label">LATEST AUDIO JOB</span><strong>{job.status.replaceAll('_', ' ')}</strong></div>
+          <div className="job-heading"><span className="job-label">LATEST AUDIO JOB · <Link to={`/jobs/${job.id}`}>Details ↗</Link></span><strong>{job.status.replaceAll('_', ' ')}</strong></div>
           <p>{job.stage.replaceAll('_', ' ')} · Attempt {job.attempt_count} / {job.max_attempts}</p>
           {job.error_message && <p className="job-error">{job.error_message}</p>}
-          {job.status === 'needs_attention' && <p className="audio-help">The previous call may have been billed. Generating again creates a new job and may incur another charge.</p>}
+          {job.status === 'needs_attention' && <p className="audio-help">Open job details to recover saved audio or review the charge risk before a new synthesis call.</p>}
           <ol className="audio-events">{events.map(item => <li key={item.id}><span>{timestamp(item.created_at)}</span>{item.message}</li>)}</ol>
         </section>}
         <section className="card audio-library">

@@ -1,6 +1,6 @@
 # EchoFlow
 
-EchoFlow is an AI content-to-audio platform. This repository implements **stages 1–4: article management, asynchronous script generation, quality evaluation, human approval, and MP3 audio delivery**.
+EchoFlow is an AI content-to-audio platform. This repository implements **stages 1-5: article management, asynchronous script generation, quality evaluation, human approval, MP3 audio delivery, safe recovery, and operational monitoring**.
 
 ## Run locally
 
@@ -9,7 +9,7 @@ EchoFlow is an AI content-to-audio platform. This repository implements **stages
 3. Run `docker compose up --build -d` from the repository root.
 4. Open <http://localhost:5173/>. The API documentation is at <http://localhost:8000/docs>.
 
-Compose starts PostgreSQL, Redis and MinIO, runs Alembic migrations and private bucket initialization, then starts the API, outbox dispatcher, Celery worker, and frontend. PostgreSQL uses `postgres_data`, Redis uses `redis_data`, and MinIO uses `minio_data`; `docker compose down` retains all three volumes. `docker compose down -v` removes their data.
+Compose starts PostgreSQL, Redis and MinIO, runs Alembic migrations and private bucket initialization, then starts the API, outbox dispatcher, Celery worker, independent maintenance service, and frontend. PostgreSQL uses `postgres_data`, Redis uses `redis_data`, and MinIO uses `minio_data`; `docker compose down` retains these volumes and the `audio_staging` checkpoint volume. `docker compose down -v` removes their data.
 
 MinIO is built from the pinned [official source release RELEASE.2025-10-15T17-29-55Z](https://github.com/minio/minio/releases/tag/RELEASE.2025-10-15T17-29-55Z) because the upstream prebuilt images are unavailable. The first build downloads Go and compiles MinIO, so it takes longer; subsequent builds use Docker's cache. Its console is at <http://localhost:9001>, with `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` from `.env` (development defaults: `echoflow` / `local-dev-password`). The S3 port stays internal and the audio bucket is private.
 
@@ -24,13 +24,13 @@ To use OpenRouter, create `.env` from `.env.example` and set:
 ```dotenv
 LLM_PROVIDER=openrouter
 OPENROUTER_API_KEY=your-key
-OPENROUTER_MODEL=google/gemini-2.5-flash
-OPENROUTER_EVALUATION_MODEL=google/gemini-2.5-flash
+OPENROUTER_MODEL=z-ai/glm-5.3-flash
+OPENROUTER_EVALUATION_MODEL=z-ai/glm-5.3-flash
 ```
 
 Restart the affected services with `docker compose up --build -d`. OpenRouter is never selected implicitly and the application never falls back to Mock when real mode fails. Keys remain in server-side environment variables and are not written to the database or logs.
 
-Generation jobs move through `queued`, `running`, `retry_scheduled`, and a terminal state of `succeeded`, `failed`, or `needs_attention`. Temporary connection, rate-limit, and availability failures receive up to three attempts. An uncertain response timeout becomes `needs_attention` because repeating it could create another billed call. Stage 2 displays that outcome; full manual recovery arrives in a later stage.
+Generation jobs move through `queued`, `running`, `retry_scheduled`, and a terminal state of `succeeded`, `failed`, or `needs_attention`. Temporary connection, rate-limit, and availability failures receive up to three attempts. An uncertain response timeout becomes `needs_attention` because repeating it could create another billed call. Open Job Monitor to review the call and create a linked manual retry.
 
 ## Evaluation and review
 
@@ -66,7 +66,7 @@ Stage 4 supports `eleven_flash_v2_5` only; its 40,000-character request limit co
 
 `/audio` lists recordings, searches article titles, and provides playback, MP3 download, source script and job details. Playback supports HTTP byte ranges through the API; no browser needs a container-only address. Deletion removes the stored file and hides the recording from the library, while retaining metadata, approval references and job history. Failed deletion can be retried. Deleted audio metadata remains queryable by ID; its media endpoints return `410`.
 
-Repeated requests with the same script, provider, model, voice, language, speed and format reuse an active job or an existing available recording. A failed/uncertain job or deleted recording can be replaced using a new idempotency key. Connection failures and HTTP 429/500/502/503/504 receive up to three attempts (5s and 30s delays). Read timeouts or interrupted responses become `needs_attention`; generating again may incur another charge. Storage upload failures retry only the upload, never synthesis. Forced worker termination recovery, general manual retries and scheduled orphan cleanup arrive in Stage 5.
+Repeated requests with the same script, provider, model, voice, language, speed and format reuse an active job or an existing available recording. A failed/uncertain job or deleted recording can be replaced using a new idempotency key. Connection failures and HTTP 429/500/502/503/504 receive up to three attempts (5s and 30s delays). Read timeouts or interrupted responses become `needs_attention`; generating again may incur another charge. Storage upload failures retry only the upload, never synthesis. A durable audio checkpoint lets Stage 5 resume uploads after worker termination, without another synthesis call.
 
 ElevenLabs `character-cost` is saved as provider credits, **not dollars**; monetary cost is left unset when unavailable. Request IDs, input characters, latency and audio duration are persisted without storing script text in provider-call records.
 
@@ -118,3 +118,76 @@ With Python dependencies installed from `backend/requirements-dev.txt`, run `cd 
 
 The optional `tests/test_audio_postgres.py` check uses `TEST_POSTGRES_URL` (a local PostgreSQL admin URL with CREATEDB permission). It creates a randomly named temporary database, upgrades Stage 3 data, checks concurrent creation and delivery plus foreign keys/uniqueness, then drops only that temporary database. It never migrates or drops the database named in the supplied URL. This check is skipped by default.
 
+
+
+## Stage 5: deployment and recovery
+
+When upgrading an existing Stage 4 database, stop the old task processes **before migration**:
+
+```powershell
+docker compose stop worker dispatcher maintenance
+docker compose build
+docker compose run --rm migrate
+docker compose up -d --no-build
+```
+
+On a first install without a maintenance container, use `docker compose stop worker dispatcher` instead. Migration `0005_recovery` preserves terminal jobs and conservatively marks legacy `running` jobs and their evaluations `needs_attention`; their unfinished provider calls become `unknown`. Existing `.env` values stay authoritative. Environment changes require container recreation (`docker compose up -d --force-recreate api worker`), not only `restart`.
+
+The database owns execution state. Each claim creates a `job_executions` row, renews its 60-second lease every 10 seconds, and fences stage/result commits with its execution ID. Maintenance checks leases every 15 seconds independently of Redis. A task lost before any provider call is prepared can be safely requeued within its three-attempt allowance. A prepared call with an unknown outcome, or an LLM result that could not be saved, requires human attention. The dispatcher commits `queued` before publishing and republishes unclaimed dispatched jobs after 120 seconds using the same outbox row. Duplicate deliveries cannot create duplicate results.
+
+Audio synthesis first reserves a stable asset ID/object key, writes and validates the MP3, fsyncs data, and atomically commits a JSON checkpoint on `audio_staging`. Only Worker and maintenance mount this private volume. Checkpoints include hashes, sizes, duration, the original approval and provider-call identity, and available accounting metadata. Upload/database failures retain the file and reuse that object key. Recovery can save already synthesized audio against its original valid approval even after a later edit. A **new synthesis call** must satisfy current approval and voice requirements.
+
+**Recovery boundary:** if external synthesis succeeded but the full checkpoint was not committed before interruption, the job becomes `needs_attention`. The application cannot guarantee avoiding another charge in this window. Complete recoverable audio is retained for seven days; Job Monitor shows its deadline. Expired/incomplete files and unreferenced objects older than 24 hours are cleaned only after reference/active-job checks. Storage cleanup runs independently of lease maintenance. Failed audio deletions are attempted at most three times automatically; the Audio Studio Delete action starts another explicit deletion attempt.
+
+### Job Monitor and manual retry
+
+Open <http://localhost:5173/jobs> or a task's **Details** link. Filter by article title, type, state and creation time. `/jobs/{job-id}` restores attempts, stage events, safe provider configuration, request IDs, usage, errors, result links and parent/root/child retry links after refresh. Lists poll every five seconds; active task details every two seconds. Polling stops on leaving the page, and task details stop when terminal.
+
+Only `failed`/`needs_attention` jobs can create a retry. Each task has at most one direct retry child; retry that child if it fails again. The original task and its calls are retained. The UI distinguishes **Resume upload** (no new TTS call) from **Create retry job** (new provider call using current configuration). Unknown/billed-but-lost results require an explicit charge-risk acknowledgement. Obsolete script/evaluation inputs link back to the corresponding Studio for correction.
+
+```http
+POST /jobs/{job-id}/retry
+Idempotency-Key: <uuid>
+Content-Type: application/json
+
+{"acknowledge_possible_charge": false}
+```
+
+A new child returns `202` and `Location`; replay or an existing direct child returns `200`. Conflicting request keys return `409 IDEMPOTENCY_CONFLICT`; unacknowledged charge risk returns `409 CHARGE_ACKNOWLEDGEMENT_REQUIRED`. Evaluation retries create a new report. Already active/equivalent audio returns a conflict with a reusable resource location. `/jobs/{id}/executions`, `/calls`, and `/events` are paginated (`items`, `total`, `limit`, `offset`).
+
+### Dashboard and readiness
+
+Open <http://localhost:5173/dashboard>. Choose 24 hours, seven days, 30 days, or all time. `GET /metrics/overview` accepts UTC `from`/`to` (inclusive start, exclusive end), defaults to seven days, and supports `all_time=true`. Job counts use job creation time, including manual children as separate jobs. Call usage uses call creation time and counts each call once. Current review workload is a point-in-time gauge; unresolved attention counts include only retry-chain leaves in the selected cohort.
+
+Active duration is the sum of known execution durations per terminal job, excluding queue/backoff/human waiting. Jobs with abandoned/unknown-duration attempts are excluded, and sample coverage is shown. LLM/Judge/TTS latency reports measured call counts, separating Mock from real providers. Known OpenRouter USD, ElevenLabs credits, unknown-cost calls and Mock calls remain separate. They are never converted or summed into a fictional monetary total.
+
+`GET /health/ready` checks PostgreSQL, Redis, the private MinIO bucket and a recovery heartbeat younger than 60 seconds. It returns `503` when a dependency is unavailable and never calls a paid provider. `/health` remains the basic database liveness check. Application JSON logs use whitelisted IDs and accounting metadata; raw provider errors, prompts, article/script bodies and credentials are excluded.
+
+### Provider configuration
+
+Default generation and Judge models are `z-ai/glm-5.3-flash`. Explicit `OPENROUTER_MODEL` and `OPENROUTER_EVALUATION_MODEL` in `.env` override defaults. New jobs store a whitelisted non-secret snapshot; already queued jobs keep their settings. Manual retries that call a provider capture the latest server configuration. API keys are always resolved at execution time and never stored in snapshots.
+
+| Setting | Default |
+| --- | --- |
+| `GENERATION_TOKENS_SHORT` / `MEDIUM` / `LONG` | 4000 / 6000 / 8000 |
+| `EVALUATION_TOKENS` | 4000 |
+| `GENERATION_REASONING_EFFORT` / `EVALUATION_REASONING_EFFORT` | low / low |
+| `GENERATION_TEMPERATURE` / `EVALUATION_TEMPERATURE` | 0.3 / 0.1 |
+
+These settings are typed and bounded. Word-count targets, narration speed estimates and prompt versions remain business rules. Successful and invalid/truncated responses retain available provider request IDs, actual model, usage, cost and latency; missing values remain unknown.
+
+### Idempotent Mock demonstration
+
+Set **both** providers to `mock`, recreate API/Worker, then run:
+
+```powershell
+docker compose exec api python -m app.demo
+```
+
+The script checks both local configuration and the target API's mode before creating data, and refuses real-provider mode. It creates English/German samples and drives article -> asynchronous generation -> manual evaluation -> critical-issue acknowledgement/approval -> asynchronous audio using stable idempotency keys. Re-running reuses the same results. Demo approvals apply only to these clearly named demo samples. Mock audio is a two-second test tone.
+
+### Recovery verification
+
+Use a separate Mock Compose project and distinct volumes for fault injection. Verify temporary failures retry after 5/30 seconds; duplicate messages have one claimed execution; killing a Worker before a provider call safely requeues; killing during a prepared call requires attention; killing after a complete checkpoint resumes only upload. Stop MinIO after synthesis, restart Worker, restore MinIO, and confirm one synthesis call remains. Create a manual retry and inspect its preserved parent/call records. Finally run `docker compose down` / `up -d` (without `-v`) and verify jobs, events, retry links, metrics and downloads survive.
+
+Backend tests use Mock adapters/HTTPX transports by default. PostgreSQL migration/concurrency tests use a randomly named disposable database when `TEST_POSTGRES_URL` is set (requires CREATEDB); they do not alter the named source database. Real OpenRouter/ElevenLabs smoke tests are manual and opt-in; never include keys or paid calls in automated acceptance.

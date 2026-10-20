@@ -18,6 +18,7 @@ from app.models import (
     ScriptVersion,
     TaskOutbox,
 )
+from app.provider_config import snapshot
 
 EVALUATION_TASK_NAME = "app.worker.evaluate_script_task"
 
@@ -36,9 +37,13 @@ def evaluation_fingerprint(script: ScriptVersion) -> str:
 def validate_provider_configuration() -> None:
     settings = get_settings()
     if settings.llm_provider == "openrouter" and not settings.openrouter_api_key:
-        raise ApiError(503, "LLM_NOT_CONFIGURED", "OpenRouter API key is not configured")
+        raise ApiError(
+            503, "LLM_NOT_CONFIGURED", "OpenRouter API key is not configured"
+        )
     if settings.llm_provider not in {"mock", "openrouter"}:
-        raise ApiError(503, "LLM_NOT_CONFIGURED", "The configured LLM provider is not supported")
+        raise ApiError(
+            503, "LLM_NOT_CONFIGURED", "The configured LLM provider is not supported"
+        )
 
 
 async def create_evaluation_job(
@@ -51,7 +56,9 @@ async def create_evaluation_job(
     script = await session.get(ScriptVersion, script_id)
     if script is None:
         raise ApiError(404, "SCRIPT_NOT_FOUND", "Script version not found")
-    await session.execute(select(Article).where(Article.id == script.article_id).with_for_update())
+    await session.execute(
+        select(Article).where(Article.id == script.article_id).with_for_update()
+    )
 
     key = idempotency_key.strip() if idempotency_key else None
     if key is not None and (not key or len(key) > 128):
@@ -74,12 +81,17 @@ async def create_evaluation_job(
                 )
             evaluation = await session.get(Evaluation, existing.result_evaluation_id)
             if evaluation is None:
-                raise ApiError(409, "IDEMPOTENCY_CONFLICT", "The original evaluation is unavailable")
+                raise ApiError(
+                    409,
+                    "IDEMPOTENCY_CONFLICT",
+                    "The original evaluation is unavailable",
+                )
             return existing, evaluation, True
 
     now = datetime.now(UTC)
     job = ProductionJob(
         job_type="script_evaluation",
+        provider_snapshot=snapshot("script_evaluation"),
         article_id=script.article_id,
         source_script_version_id=script.id,
         status="queued",
@@ -93,6 +105,7 @@ async def create_evaluation_job(
         attempt_count=0,
         max_attempts=3,
     )
+    job.root_job_id = job.id
     session.add(job)
     await session.flush()
     evaluation = Evaluation(
@@ -136,11 +149,15 @@ async def create_evaluation_job(
         )
         if existing is None or existing.input_fingerprint != fingerprint:
             raise ApiError(
-                409, "IDEMPOTENCY_CONFLICT", "The Idempotency-Key conflicts with another request"
+                409,
+                "IDEMPOTENCY_CONFLICT",
+                "The Idempotency-Key conflicts with another request",
             )
         evaluation = await session.get(Evaluation, existing.result_evaluation_id)
         if evaluation is None:
-            raise ApiError(409, "IDEMPOTENCY_CONFLICT", "The original evaluation is unavailable")
+            raise ApiError(
+                409, "IDEMPOTENCY_CONFLICT", "The original evaluation is unavailable"
+            )
         return existing, evaluation, True
     await session.refresh(job)
     await session.refresh(evaluation)

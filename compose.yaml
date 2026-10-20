@@ -17,6 +17,25 @@ x-audio-environment: &audio-environment
   TTS_MAX_RESPONSE_BYTES: ${TTS_MAX_RESPONSE_BYTES:-67108864}
   TTS_VOICE_CACHE_SECONDS: ${TTS_VOICE_CACHE_SECONDS:-300}
 
+x-provider-environment: &provider-environment
+  <<: *audio-environment
+  LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+  OPENROUTER_MODEL: ${OPENROUTER_MODEL:-z-ai/glm-5.3-flash}
+  OPENROUTER_EVALUATION_MODEL: ${OPENROUTER_EVALUATION_MODEL:-z-ai/glm-5.3-flash}
+  OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+  OPENROUTER_TIMEOUT_SECONDS: ${OPENROUTER_TIMEOUT_SECONDS:-90}
+  OPENROUTER_HTTP_REFERER: ${OPENROUTER_HTTP_REFERER:-http://localhost:5173}
+  OPENROUTER_APP_TITLE: ${OPENROUTER_APP_TITLE:-EchoFlow}
+  GENERATION_TOKENS_SHORT: ${GENERATION_TOKENS_SHORT:-4000}
+  GENERATION_TOKENS_MEDIUM: ${GENERATION_TOKENS_MEDIUM:-6000}
+  GENERATION_TOKENS_LONG: ${GENERATION_TOKENS_LONG:-8000}
+  EVALUATION_TOKENS: ${EVALUATION_TOKENS:-4000}
+  GENERATION_REASONING_EFFORT: ${GENERATION_REASONING_EFFORT:-low}
+  EVALUATION_REASONING_EFFORT: ${EVALUATION_REASONING_EFFORT:-low}
+  GENERATION_TEMPERATURE: ${GENERATION_TEMPERATURE:-0.3}
+  EVALUATION_TEMPERATURE: ${EVALUATION_TEMPERATURE:-0.1}
+
 services:
   db:
     image: postgres:17-alpine
@@ -56,13 +75,10 @@ services:
   api:
     build: ./backend
     environment:
-      <<: *audio-environment
+      <<: *provider-environment
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://echoflow:local-dev-password@db:5432/echoflow}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173,http://127.0.0.1:5173}
-      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-google/gemini-2.5-flash}
-      OPENROUTER_EVALUATION_MODEL: ${OPENROUTER_EVALUATION_MODEL:-google/gemini-2.5-flash}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
     depends_on:
       minio-init:
         condition: service_completed_successfully
@@ -80,17 +96,12 @@ services:
     build: ./backend
     command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2", "--queues=script_generation,script_evaluation,audio_generation"]
     environment:
-      <<: *audio-environment
+      <<: *provider-environment
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://echoflow:local-dev-password@db:5432/echoflow}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
-      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-google/gemini-2.5-flash}
-      OPENROUTER_EVALUATION_MODEL: ${OPENROUTER_EVALUATION_MODEL:-google/gemini-2.5-flash}
-      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
-      OPENROUTER_TIMEOUT_SECONDS: ${OPENROUTER_TIMEOUT_SECONDS:-90}
-      OPENROUTER_HTTP_REFERER: ${OPENROUTER_HTTP_REFERER:-http://localhost:5173}
-      OPENROUTER_APP_TITLE: ${OPENROUTER_APP_TITLE:-EchoFlow}
+      AUDIO_STAGING_PATH: /var/lib/echoflow/audio-staging
+    volumes:
+      - audio_staging:/var/lib/echoflow/audio-staging
     depends_on:
       minio-init:
         condition: service_completed_successfully
@@ -110,6 +121,20 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+
+  maintenance:
+    build: ./backend
+    command: ["python", "-m", "app.maintenance"]
+    environment:
+      <<: *storage-environment
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://echoflow:local-dev-password@db:5432/echoflow}
+      AUDIO_STAGING_PATH: /var/lib/echoflow/audio-staging
+    volumes:
+      - audio_staging:/var/lib/echoflow/audio-staging
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
   minio:
     build: ./infra/minio
@@ -152,3 +177,4 @@ volumes:
   redis_data:
   minio_data:
 
+  audio_staging:

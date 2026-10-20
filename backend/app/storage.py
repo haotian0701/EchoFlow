@@ -36,6 +36,12 @@ class AudioStorage:
     def delete(self, bucket, key):
         self.client.remove_object(bucket, key)
 
+    def list_objects(self):
+        return self.client.list_objects(self.bucket, prefix="audio/", recursive=True)
+
+    def ready(self):
+        return self.client.bucket_exists(self.bucket)
+
 
 def get_audio_storage():
     return AudioStorage()

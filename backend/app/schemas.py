@@ -113,6 +113,17 @@ class JobOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    retry_of_job_id: UUID | None = None
+    root_job_id: UUID | None = None
+    current_execution_id: UUID | None = None
+    provider_snapshot: dict[str, Any] = Field(default_factory=dict)
+    article_title: str = ""
+    can_retry: bool = False
+    retry_mode: Literal["new_call", "resume_upload"] = "new_call"
+    requires_charge_acknowledgement: bool = False
+    retry_child_job_id: UUID | None = None
+    retry_unavailable_reason: str | None = None
+    recovery_expires_at: datetime | None = None
     job_type: Literal["script_generation", "script_evaluation", "audio_generation"]
     article_id: UUID
     source_script_version_id: UUID | None
@@ -158,6 +169,51 @@ class JobEventOut(BaseModel):
 
 class JobEventList(BaseModel):
     items: list[JobEventOut]
+    total: int = 0
+    limit: int = 100
+    offset: int = 0
+
+
+class JobRetryBody(BaseModel):
+    acknowledge_possible_charge: bool = False
+
+
+class ExecutionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    job_id: UUID
+    attempt_no: int
+    stage: str
+    status: str
+    heartbeat_at: datetime
+    lease_expires_at: datetime
+    started_at: datetime
+    completed_at: datetime | None
+
+
+class ProviderCallOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    job_id: UUID
+    execution_id: UUID | None
+    operation: str
+    provider: str
+    requested_model: str
+    actual_model: str | None
+    provider_request_id: str | None
+    status: str
+    retryable: bool
+    uncertain: bool
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    total_tokens: int | None
+    cost: float | None
+    provider_credits: float | None
+    latency_ms: int | None
+    error_code: str | None
+    error_message: str | None
+    created_at: datetime
+    completed_at: datetime | None
 
 
 class ScriptSummary(BaseModel):
@@ -196,7 +252,9 @@ class RegenerateRequest(BaseModel):
 class AudioCreate(BaseModel):
     language: Language
     voice_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_-]+$")
-    speed: float = Field(default=1.0, ge=0.7, le=1.2, multiple_of=0.01, allow_inf_nan=False)
+    speed: float = Field(
+        default=1.0, ge=0.7, le=1.2, multiple_of=0.01, allow_inf_nan=False
+    )
 
 
 class TTSVoice(BaseModel):

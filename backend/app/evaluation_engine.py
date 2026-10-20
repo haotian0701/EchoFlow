@@ -10,7 +10,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from app.config import Settings, get_settings
-from app.llm import WORD_TARGETS, ProviderError
+from app.llm import WORD_TARGETS, ProviderError, response_metadata
 from app.models import Article, ScriptVersion
 
 RULE_VERSION = "evaluation-rules-v1"
@@ -202,7 +202,9 @@ def run_rules(article: Article, script: ScriptVersion) -> list[dict]:
                 )
             )
 
-    format_match = re.search(r"(?:https?://\S+|^\s{0,3}(?:[-*#]|\d+[.)])\s+|`{1,3})", text, re.MULTILINE)
+    format_match = re.search(
+        r"(?:https?://\S+|^\s{0,3}(?:[-*#]|\d+[.)])\s+|`{1,3})", text, re.MULTILINE
+    )
     if format_match:
         issues.append(
             _issue(
@@ -285,7 +287,9 @@ class MockEvaluationProvider:
         deductions = {"info": 0.03, "warning": 0.10, "critical": 0.25}
         for issue in rule_issues:
             dimension = issue["dimension"]
-            scores[dimension] = max(0.0, scores[dimension] - deductions[issue["severity"]])
+            scores[dimension] = max(
+                0.0, scores[dimension] - deductions[issue["severity"]]
+            )
         return EvaluationResult(
             factual_consistency=round(scores["factual_consistency"], 3),
             content_coverage=round(scores["content_coverage"], 3),
@@ -330,16 +334,27 @@ class OpenRouterEvaluationProvider:
             "properties": {
                 "dimension": {
                     "type": "string",
-                    "enum": ["factual_consistency", "content_coverage", "audio_readiness"],
+                    "enum": [
+                        "factual_consistency",
+                        "content_coverage",
+                        "audio_readiness",
+                    ],
                 },
                 "severity": {"type": "string", "enum": ["info", "warning", "critical"]},
                 "title": {"type": "string", "minLength": 1, "maxLength": 160},
                 "explanation": {"type": "string", "minLength": 1, "maxLength": 1200},
                 "script_quote": {"type": ["string", "null"], "maxLength": 1000},
-                "article_evidence_quote": {"type": ["string", "null"], "maxLength": 1000},
+                "article_evidence_quote": {
+                    "type": ["string", "null"],
+                    "maxLength": 1000,
+                },
             },
             "required": [
-                "dimension", "severity", "title", "explanation", "script_quote",
+                "dimension",
+                "severity",
+                "title",
+                "explanation",
+                "script_quote",
                 "article_evidence_quote",
             ],
             "additionalProperties": False,
@@ -350,8 +365,9 @@ class OpenRouterEvaluationProvider:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "temperature": 0.1,
-            "max_tokens": 4000,
+            "temperature": self.settings.evaluation_temperature,
+            "max_completion_tokens": self.settings.evaluation_tokens,
+            "reasoning_effort": self.settings.evaluation_reasoning_effort,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -360,13 +376,32 @@ class OpenRouterEvaluationProvider:
                     "schema": {
                         "type": "object",
                         "properties": {
-                            "factual_consistency": {"type": "number", "minimum": 0, "maximum": 1},
-                            "content_coverage": {"type": "number", "minimum": 0, "maximum": 1},
-                            "audio_readiness": {"type": "number", "minimum": 0, "maximum": 1},
-                            "issues": {"type": "array", "maxItems": 50, "items": issue_schema},
+                            "factual_consistency": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1,
+                            },
+                            "content_coverage": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1,
+                            },
+                            "audio_readiness": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1,
+                            },
+                            "issues": {
+                                "type": "array",
+                                "maxItems": 50,
+                                "items": issue_schema,
+                            },
                         },
                         "required": [
-                            "factual_consistency", "content_coverage", "audio_readiness", "issues"
+                            "factual_consistency",
+                            "content_coverage",
+                            "audio_readiness",
+                            "issues",
                         ],
                         "additionalProperties": False,
                     },
@@ -385,46 +420,63 @@ class OpenRouterEvaluationProvider:
                 timeout=self.settings.openrouter_timeout_seconds,
                 transport=self.transport,
             ) as client:
-                response = await client.post("/chat/completions", headers=headers, json=payload)
+                response = await client.post(
+                    "/chat/completions", headers=headers, json=payload
+                )
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             raise ProviderError(
-                "PROVIDER_UNAVAILABLE", "Could not connect to OpenRouter", retryable=True
+                "PROVIDER_UNAVAILABLE",
+                "Could not connect to OpenRouter",
+                retryable=True,
             ) from exc
-        except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.RemoteProtocolError) as exc:
+        except (
+            httpx.ReadTimeout,
+            httpx.WriteTimeout,
+            httpx.RemoteProtocolError,
+        ) as exc:
             raise ProviderError(
                 "PROVIDER_RESULT_UNKNOWN",
                 "OpenRouter did not return a definite evaluation result",
                 ambiguous=True,
             ) from exc
 
+        metadata = response_metadata(response, started)
         if response.status_code >= 400:
             message = "OpenRouter rejected the evaluation request"
-            try:
-                error = response.json().get("error", {})
-                if isinstance(error, dict) and error.get("message"):
-                    message = str(error["message"])
-            except (ValueError, AttributeError):
-                pass
             if response.status_code in {429, 503, 529}:
-                raise ProviderError("PROVIDER_TEMPORARY_ERROR", message, retryable=True)
+                raise ProviderError(
+                    "PROVIDER_TEMPORARY_ERROR",
+                    message,
+                    retryable=True,
+                    metadata=metadata,
+                )
             if response.status_code in {408, 500, 502, 524}:
-                raise ProviderError("PROVIDER_RESULT_UNKNOWN", message, ambiguous=True)
-            raise ProviderError("PROVIDER_REJECTED", message)
+                raise ProviderError(
+                    "PROVIDER_RESULT_UNKNOWN",
+                    message,
+                    ambiguous=True,
+                    metadata=metadata,
+                )
+            raise ProviderError("PROVIDER_REJECTED", message, metadata=metadata)
 
         try:
             data = response.json()
             choice = data["choices"][0]
             if choice.get("finish_reason") == "length":
-                raise ProviderError("LLM_OUTPUT_TRUNCATED", "The evaluation was truncated")
+                raise ProviderError(
+                    "LLM_OUTPUT_TRUNCATED", "The evaluation was truncated"
+                )
             parsed = JudgePayload.model_validate_json(choice["message"]["content"])
-        except ProviderError:
+        except ProviderError as error:
+            error.metadata = metadata
             raise
         except (ValueError, KeyError, IndexError, TypeError, ValidationError) as exc:
             raise ProviderError(
-                "INVALID_PROVIDER_RESPONSE", "OpenRouter returned an invalid evaluation"
+                "INVALID_PROVIDER_RESPONSE",
+                "OpenRouter returned an invalid evaluation",
+                metadata=metadata,
             ) from exc
 
-        usage = data.get("usage") or {}
         return EvaluationResult(
             factual_consistency=round(parsed.factual_consistency, 3),
             content_coverage=round(parsed.content_coverage, 3),
@@ -432,23 +484,25 @@ class OpenRouterEvaluationProvider:
             issues=[_judge_issue(article, script, issue) for issue in parsed.issues],
             provider=self.name,
             requested_model=self.requested_model,
-            actual_model=str(data.get("model") or self.requested_model),
-            provider_request_id=data.get("id"),
-            prompt_tokens=usage.get("prompt_tokens"),
-            completion_tokens=usage.get("completion_tokens"),
-            total_tokens=usage.get("total_tokens"),
-            cost=usage.get("cost"),
+            actual_model=metadata.get("actual_model") or self.requested_model,
+            provider_request_id=metadata.get("provider_request_id"),
+            prompt_tokens=metadata.get("prompt_tokens"),
+            completion_tokens=metadata.get("completion_tokens"),
+            total_tokens=metadata.get("total_tokens"),
+            cost=metadata.get("cost"),
             latency_ms=round((time.monotonic() - started) * 1000),
         )
 
 
-def get_evaluation_provider() -> EvaluationProvider:
-    settings = get_settings()
+def get_evaluation_provider(settings=None) -> EvaluationProvider:
+    settings = settings or get_settings()
     if settings.llm_provider == "mock":
         return MockEvaluationProvider()
     if settings.llm_provider == "openrouter":
         if not settings.openrouter_api_key:
-            raise ProviderError("LLM_NOT_CONFIGURED", "OpenRouter API key is not configured")
+            raise ProviderError(
+                "LLM_NOT_CONFIGURED", "OpenRouter API key is not configured"
+            )
         return OpenRouterEvaluationProvider(settings)
     raise ProviderError(
         "LLM_PROVIDER_INVALID", f"Unsupported LLM provider: {settings.llm_provider}"
