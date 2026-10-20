@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -85,3 +85,107 @@ class ImportAttemptList(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+TargetLanguage = Literal["en", "de"]
+ScriptLength = Literal["short", "medium", "long"]
+ScriptStyle = Literal["news", "conversational", "professional"]
+ScriptAudience = Literal["general", "business"]
+JobStatus = Literal[
+    "queued", "running", "retry_scheduled", "succeeded", "failed", "needs_attention"
+]
+
+
+class ScriptGenerationConfig(BaseModel):
+    target_language: TargetLanguage
+    length: ScriptLength
+    style: ScriptStyle
+    audience: ScriptAudience
+
+
+class JobCreate(BaseModel):
+    type: Literal["script_generation"]
+    article_id: UUID
+    config: ScriptGenerationConfig
+
+
+class JobOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    job_type: Literal["script_generation"]
+    article_id: UUID
+    source_script_version_id: UUID | None
+    result_script_version_id: UUID | None
+    status: JobStatus
+    stage: str
+    config: ScriptGenerationConfig
+    attempt_count: int
+    max_attempts: int
+    error_code: str | None
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+
+
+class JobCreateResult(BaseModel):
+    job: JobOut
+    idempotent_replay: bool
+
+
+class JobList(BaseModel):
+    items: list[JobOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class JobEventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    job_id: UUID
+    event_type: str
+    stage: str
+    message: str
+    metadata: dict[str, Any] = Field(validation_alias="event_metadata")
+    created_at: datetime
+
+
+class JobEventList(BaseModel):
+    items: list[JobEventOut]
+
+
+class ScriptSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    article_id: UUID
+    version: int
+    source: Literal["generated", "edited"]
+    parent_version_id: UUID | None
+    target_language: TargetLanguage
+    generation_config: ScriptGenerationConfig
+    provider: str
+    requested_model: str
+    actual_model: str
+    prompt_version: str
+    estimated_duration_seconds: int
+    created_at: datetime
+
+
+class ScriptDetail(ScriptSummary):
+    text: str
+
+
+class ScriptList(BaseModel):
+    items: list[ScriptSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class RegenerateRequest(BaseModel):
+    config: ScriptGenerationConfig | None = None

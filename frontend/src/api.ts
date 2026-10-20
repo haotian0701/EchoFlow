@@ -40,6 +40,72 @@ export interface ArticleWriteResult {
   import_attempt: ImportAttempt | null
 }
 
+export type ScriptLength = 'short' | 'medium' | 'long'
+export type ScriptStyle = 'news' | 'conversational' | 'professional'
+export type ScriptAudience = 'general' | 'business'
+export type JobStatus = 'queued' | 'running' | 'retry_scheduled' | 'succeeded' | 'failed' | 'needs_attention'
+
+export interface GenerationConfig {
+  target_language: Language
+  length: ScriptLength
+  style: ScriptStyle
+  audience: ScriptAudience
+}
+
+export interface ProductionJob {
+  id: string
+  job_type: 'script_generation'
+  article_id: string
+  source_script_version_id: string | null
+  result_script_version_id: string | null
+  status: JobStatus
+  stage: string
+  config: GenerationConfig
+  attempt_count: number
+  max_attempts: number
+  error_code: string | null
+  error_message: string | null
+  created_at: string
+  updated_at: string
+  started_at: string | null
+  completed_at: string | null
+}
+
+export interface JobEvent {
+  id: string
+  job_id: string
+  event_type: string
+  stage: string
+  message: string
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export interface ScriptSummary {
+  id: string
+  article_id: string
+  version: number
+  source: 'generated' | 'edited'
+  parent_version_id: string | null
+  target_language: Language
+  generation_config: GenerationConfig
+  provider: string
+  requested_model: string
+  actual_model: string
+  prompt_version: string
+  estimated_duration_seconds: number
+  created_at: string
+}
+
+export interface ScriptVersion extends ScriptSummary {
+  text: string
+}
+
+export interface JobCreateResult {
+  job: ProductionJob
+  idempotent_replay: boolean
+}
+
 interface ApiErrorBody {
   code: string
   message: string
@@ -74,5 +140,23 @@ export const api = {
     request<ArticleWriteResult>('/articles', { method: 'POST', body: JSON.stringify(body) }),
   import: (body: { url: string; title?: string; source?: string; language: Language }) =>
     request<ArticleWriteResult>('/articles/import', { method: 'POST', body: JSON.stringify(body) }),
+  createScriptJob: (articleId: string, config: GenerationConfig, idempotencyKey: string) =>
+    request<JobCreateResult>('/jobs', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({ type: 'script_generation', article_id: articleId, config }),
+    }),
+  jobs: (articleId: string) =>
+    request<Page<ProductionJob>>(`/jobs?article_id=${encodeURIComponent(articleId)}&limit=20&offset=0`),
+  job: (id: string) => request<ProductionJob>(`/jobs/${id}`),
+  jobEvents: (id: string) => request<{ items: JobEvent[] }>(`/jobs/${id}/events`),
+  scripts: (articleId: string) => request<Page<ScriptSummary>>(`/articles/${articleId}/scripts?limit=100&offset=0`),
+  script: (id: string) => request<ScriptVersion>(`/scripts/${id}`),
+  regenerate: (scriptId: string, config: GenerationConfig, idempotencyKey: string) =>
+    request<JobCreateResult>(`/scripts/${scriptId}/regenerate`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({ config }),
+    }),
 }
 

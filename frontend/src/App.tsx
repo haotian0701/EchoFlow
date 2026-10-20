@@ -1,5 +1,8 @@
 import { FormEvent, useEffect, useState } from 'react'
-import { api, ApiError, Article, ArticleSummary, ImportAttempt, Language } from './api'
+import {
+  api, ApiError, Article, ArticleSummary, GenerationConfig, ImportAttempt,
+  JobEvent, Language, ProductionJob, ScriptSummary, ScriptVersion,
+} from './api'
 
 type EntryMode = 'manual' | 'url'
 
@@ -9,6 +12,14 @@ function dateTime(value: string) {
 
 function shortHost(url: string) {
   try { return new URL(url).hostname } catch { return url }
+}
+
+const terminalStatuses = new Set(['succeeded', 'failed', 'needs_attention'])
+
+function duration(seconds: number) {
+  const minutes = Math.floor(seconds / 60)
+  const remainder = seconds % 60
+  return `${minutes}:${remainder.toString().padStart(2, '0')}`
 }
 
 export default function App() {
@@ -29,6 +40,14 @@ export default function App() {
   const [selected, setSelected] = useState<Article | null>(null)
   const [activePanel, setActivePanel] = useState<'articles' | 'imports'>('articles')
   const [busy, setBusy] = useState(false)
+  const [generationBusy, setGenerationBusy] = useState(false)
+  const [generationConfig, setGenerationConfig] = useState<GenerationConfig>({
+    target_language: 'en', length: 'short', style: 'news', audience: 'general',
+  })
+  const [job, setJob] = useState<ProductionJob | null>(null)
+  const [jobEvents, setJobEvents] = useState<JobEvent[]>([])
+  const [scripts, setScripts] = useState<ScriptSummary[]>([])
+  const [script, setScript] = useState<ScriptVersion | null>(null)
   const [notice, setNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
 
   async function refreshArticles(nextOffset = offset, nextQuery = query) {
@@ -48,6 +67,85 @@ export default function App() {
       setNotice({ kind: 'error', text: 'Could not load the studio. Check that the API is running.' })
     })
   }, [offset, query, importOffset])
+
+  useEffect(() => {
+    if (!selected) {
+      setJob(null)
+      setJobEvents([])
+      setScripts([])
+      setScript(null)
+      return
+    }
+    setGenerationConfig(current => ({ ...current, target_language: selected.language }))
+    void loadProduction(selected.id)
+  }, [selected?.id])
+
+  useEffect(() => {
+    if (!job || terminalStatuses.has(job.status)) return
+    const timer = window.setInterval(() => {
+      void refreshJob(job.id)
+    }, 2000)
+    return () => window.clearInterval(timer)
+  }, [job?.id, job?.status])
+
+  async function loadProduction(articleId: string) {
+    try {
+      const [jobPage, scriptPage] = await Promise.all([api.jobs(articleId), api.scripts(articleId)])
+      const latestJob = jobPage.items[0] || null
+      setJob(latestJob)
+      setScripts(scriptPage.items)
+      setJobEvents(latestJob ? (await api.jobEvents(latestJob.id)).items : [])
+      const scriptId = latestJob?.result_script_version_id || scriptPage.items[0]?.id
+      setScript(scriptId ? await api.script(scriptId) : null)
+    } catch (error) {
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Could not load script production.' })
+    }
+  }
+
+  async function refreshJob(id: string) {
+    try {
+      const [nextJob, events] = await Promise.all([api.job(id), api.jobEvents(id)])
+      setJob(nextJob)
+      setJobEvents(events.items)
+      if (nextJob.status === 'succeeded' && nextJob.result_script_version_id && selected) {
+        const [nextScript, scriptPage] = await Promise.all([
+          api.script(nextJob.result_script_version_id), api.scripts(selected.id),
+        ])
+        setScript(nextScript)
+        setScripts(scriptPage.items)
+      }
+    } catch (error) {
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Could not refresh the generation job.' })
+    }
+  }
+
+  async function generate(regenerate = false) {
+    if (!selected) return
+    setGenerationBusy(true)
+    setNotice(null)
+    try {
+      const key = crypto.randomUUID()
+      const result = regenerate && script
+        ? await api.regenerate(script.id, generationConfig, key)
+        : await api.createScriptJob(selected.id, generationConfig, key)
+      setJob(result.job)
+      setJobEvents((await api.jobEvents(result.job.id)).items)
+      setNotice({ kind: 'success', text: regenerate ? 'A new script version is queued.' : 'Script generation is queued.' })
+    } catch (error) {
+      const message = error instanceof ApiError ? error.body.message : error instanceof Error ? error.message : 'Could not start generation.'
+      setNotice({ kind: 'error', text: message })
+    } finally {
+      setGenerationBusy(false)
+    }
+  }
+
+  async function selectScript(id: string) {
+    try {
+      setScript(await api.script(id))
+    } catch (error) {
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Could not load the script.' })
+    }
+  }
 
   async function selectArticle(id: string) {
     try {
@@ -184,6 +282,42 @@ export default function App() {
               <div className="detail-header"><h3>{selected.title}</h3><p>{selected.source} · {selected.language === 'en' ? 'English' : 'German'} · Saved {dateTime(selected.created_at)}</p>{selected.source_url && <a href={selected.source_url} target="_blank" rel="noreferrer">View original source ↗</a>}</div>
               <div className="article-body">{selected.original_text}</div>
             </div> : <p className="detail-placeholder">Select a saved article to read its original text here.</p>}
+          </section>
+
+          <section className="card production-card">
+            <div className="card-heading">
+              <div><p className="section-number">04 / SCRIPT GENERATION</p><h2>Prepare the audio script</h2></div>
+              {script && <span className="pending-tag">Pending evaluation · Stage 3</span>}
+            </div>
+            {!selected ? <p className="detail-placeholder">Select an article to generate an audio script.</p> : <>
+              <div className="generation-controls">
+                <label className="field">Target language<select value={generationConfig.target_language} onChange={event => setGenerationConfig({ ...generationConfig, target_language: event.target.value as Language })}><option value="en">English</option><option value="de">German</option></select></label>
+                <label className="field">Length<select value={generationConfig.length} onChange={event => setGenerationConfig({ ...generationConfig, length: event.target.value as GenerationConfig['length'] })}><option value="short">Short · ~2 min</option><option value="medium">Medium · ~5 min</option><option value="long">Long · ~9 min</option></select></label>
+                <label className="field">Style<select value={generationConfig.style} onChange={event => setGenerationConfig({ ...generationConfig, style: event.target.value as GenerationConfig['style'] })}><option value="news">News</option><option value="conversational">Conversational</option><option value="professional">Professional</option></select></label>
+                <label className="field">Audience<select value={generationConfig.audience} onChange={event => setGenerationConfig({ ...generationConfig, audience: event.target.value as GenerationConfig['audience'] })}><option value="general">General audience</option><option value="business">Business audience</option></select></label>
+                <button className="primary-button generate-button" type="button" disabled={generationBusy || (!!job && !terminalStatuses.has(job.status))} onClick={() => void generate(false)}>{generationBusy ? 'Queuing…' : 'Generate script →'}</button>
+              </div>
+
+              {job && <div className={`job-card ${job.status}`}>
+                <div className="job-summary"><div><span className="job-label">LATEST JOB</span><strong>{job.status.replace('_', ' ')}</strong></div><span>Attempt {job.attempt_count} / {job.max_attempts}</span></div>
+                <div className="progress-track"><span style={{ width: job.status === 'succeeded' ? '100%' : job.status === 'running' ? '62%' : job.status === 'queued' || job.status === 'retry_scheduled' ? '25%' : '100%' }} /></div>
+                {job.error_message && <p className="job-error">{job.error_message}{job.status === 'needs_attention' ? ' A new request may create another provider charge.' : ''}</p>}
+                <div className="event-list">{jobEvents.map(event => <div key={event.id}><time>{dateTime(event.created_at)}</time><span>{event.message}</span></div>)}</div>
+              </div>}
+
+              <div className="script-workspace">
+                <aside className="version-list">
+                  <span className="job-label">VERSIONS</span>
+                  {scripts.length === 0 ? <p>No scripts yet.</p> : scripts.map(item => <button type="button" className={script?.id === item.id ? 'active' : ''} key={item.id} onClick={() => void selectScript(item.id)}><strong>Version {item.version}</strong><span>{item.target_language.toUpperCase()} · {duration(item.estimated_duration_seconds)}</span></button>)}
+                </aside>
+                <div className="script-preview">
+                  {script ? <>
+                    <div className="script-meta"><div><h3>Script version {script.version}</h3><p>{script.provider} · {script.actual_model} · {duration(script.estimated_duration_seconds)}</p></div><button type="button" className="secondary-button" disabled={generationBusy || (!!job && !terminalStatuses.has(job.status))} onClick={() => void generate(true)}>Regenerate</button></div>
+                    <div className="script-body">{script.text}</div>
+                  </> : <p className="detail-placeholder">Configure the script and start generation. Progress and results remain available after refresh.</p>}
+                </div>
+              </div>
+            </>}
           </section>
           <footer className="footer">ECHOFlow · Content first, audio next.</footer>
         </div>

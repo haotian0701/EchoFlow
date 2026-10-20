@@ -25,11 +25,25 @@ services:
         condition: service_healthy
     restart: "no"
 
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
   api:
     build: ./backend
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://echoflow:local-dev-password@db:5432/echoflow}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173,http://127.0.0.1:5173}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-google/gemini-2.5-flash}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -40,6 +54,37 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
+
+  worker:
+    build: ./backend
+    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2", "--queues=script_generation"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://echoflow:local-dev-password@db:5432/echoflow}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-google/gemini-2.5-flash}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      OPENROUTER_TIMEOUT_SECONDS: ${OPENROUTER_TIMEOUT_SECONDS:-90}
+      OPENROUTER_HTTP_REFERER: ${OPENROUTER_HTTP_REFERER:-http://localhost:5173}
+      OPENROUTER_APP_TITLE: ${OPENROUTER_APP_TITLE:-EchoFlow}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  dispatcher:
+    build: ./backend
+    command: ["python", "-m", "app.dispatcher"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://echoflow:local-dev-password@db:5432/echoflow}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
 
   frontend:
     build: ./frontend
@@ -53,4 +98,5 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
 
