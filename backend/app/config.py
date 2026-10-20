@@ -17,6 +17,18 @@ class Settings(BaseSettings):
     openrouter_timeout_seconds: float = 90.0
     openrouter_http_referer: str = "http://localhost:5173"
     openrouter_app_title: str = "EchoFlow"
+    tts_provider: str = "mock"
+    elevenlabs_api_key: str = ""
+    elevenlabs_model: str = "eleven_flash_v2_5"
+    elevenlabs_base_url: str = "https://api.elevenlabs.io"
+    tts_timeout_seconds: float = 300.0
+    tts_max_response_bytes: int = 64 * 1024 * 1024
+    tts_voice_cache_seconds: int = 300
+    minio_endpoint: str = "http://minio:9000"
+    minio_access_key: str = "echoflow"
+    minio_secret_key: str = "local-dev-password"
+    minio_bucket: str = "echoflow-audio"
+    minio_secure: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

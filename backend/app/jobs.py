@@ -48,8 +48,9 @@ async def create_job(
 async def list_jobs(
     session: SessionDep,
     article_id: UUID | None = None,
+    script_id: UUID | None = None,
     job_type: Annotated[
-        Literal["script_generation", "script_evaluation"] | None,
+        Literal["script_generation", "script_evaluation", "audio_generation"] | None,
         Query(alias="type"),
     ] = None,
     status: Literal["queued", "running", "retry_scheduled", "succeeded", "failed", "needs_attention"] | None = None,
@@ -59,6 +60,8 @@ async def list_jobs(
     filters = []
     if article_id:
         filters.append(ProductionJob.article_id == article_id)
+    if script_id:
+        filters.append(ProductionJob.source_script_version_id == script_id)
     if job_type:
         filters.append(ProductionJob.job_type == job_type)
     if status:

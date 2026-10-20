@@ -115,7 +115,7 @@ class ProductionJob(Base):
     __tablename__ = "production_jobs"
     __table_args__ = (
         CheckConstraint(
-            "job_type IN ('script_generation', 'script_evaluation')",
+            "job_type IN ('script_generation', 'script_evaluation', 'audio_generation')",
             name="ck_jobs_type",
         ),
         CheckConstraint(
@@ -139,6 +139,9 @@ class ProductionJob(Base):
     )
     result_evaluation_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("evaluations.id"), nullable=True
+    )
+    result_audio_asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("audio_assets.id"), nullable=True
     )
     status: Mapped[str] = mapped_column(String(24), default="queued", nullable=False)
     stage: Mapped[str] = mapped_column(String(32), default="queued", nullable=False)
@@ -237,6 +240,9 @@ class ProviderCall(Base):
     completion_tokens: Mapped[int | None] = mapped_column(Integer)
     total_tokens: Mapped[int | None] = mapped_column(Integer)
     cost: Mapped[float | None] = mapped_column(Numeric(14, 8))
+    input_characters: Mapped[int | None] = mapped_column(Integer)
+    provider_credits: Mapped[float | None] = mapped_column(Numeric(14, 4))
+    audio_duration_seconds: Mapped[float | None] = mapped_column(Numeric(12, 3))
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     error_code: Mapped[str | None] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(Text)
@@ -319,3 +325,47 @@ class Approval(Base):
 
     script_version: Mapped[ScriptVersion] = relationship()
     evaluation: Mapped[Evaluation] = relationship()
+
+
+class AudioAsset(Base):
+    __tablename__ = "audio_assets"
+    __table_args__ = (
+        CheckConstraint("status IN ('available', 'deleting', 'delete_failed', 'deleted')", name="ck_audio_status"),
+        CheckConstraint("language IN ('en', 'de')", name="ck_audio_language"),
+        CheckConstraint("speed >= 0.7 AND speed <= 1.2", name="ck_audio_speed"),
+        Index("ux_audio_job", "job_id", unique=True),
+        Index("ix_audio_created", "created_at"),
+        Index("ix_audio_script", "script_version_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    article_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("articles.id"))
+    script_version_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("script_versions.id"))
+    approval_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("approvals.id"))
+    job_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("production_jobs.id"))
+    provider: Mapped[str] = mapped_column(String(32))
+    model: Mapped[str] = mapped_column(String(200))
+    language: Mapped[str] = mapped_column(String(2))
+    voice_id: Mapped[str] = mapped_column(String(200))
+    voice_name: Mapped[str] = mapped_column(String(200))
+    speed: Mapped[float] = mapped_column(Numeric(4, 2))
+    format: Mapped[str] = mapped_column(String(32), default="mp3_44100_128")
+    mime_type: Mapped[str] = mapped_column(String(64), default="audio/mpeg")
+    bucket: Mapped[str] = mapped_column(String(100))
+    object_key: Mapped[str] = mapped_column(String(200))
+    duration_seconds: Mapped[float] = mapped_column(Numeric(12, 3))
+    file_size: Mapped[int] = mapped_column(Integer)
+    input_characters: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20), default="available")
+    delete_error: Mapped[str | None] = mapped_column(Text)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, server_default=func.now())
+
+
+class AudioRequest(Base):
+    """Retain keys even when multiple requests reuse the same audio job."""
+    __tablename__ = "audio_requests"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    job_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("production_jobs.id"))

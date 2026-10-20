@@ -7,4 +7,6 @@ pydantic-settings==2.16.0
 httpx==0.28.1
 trafilatura==2.3.1
 celery[redis]==5.5.3
+minio==7.2.20
+mutagen==1.47.0
 

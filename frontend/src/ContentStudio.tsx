@@ -222,6 +222,7 @@ export default function ContentStudio() {
         <div className="rail-divider" />
         <div className="rail-icon active" title="Content Studio" aria-label="Content Studio">▦</div>
         <div className="rail-spacer" />
+        <Link className="rail-icon" title="Audio Studio" aria-label="Audio Studio" to="/audio">♫</Link>
         <div className="rail-bottom">01</div>
       </aside>
 

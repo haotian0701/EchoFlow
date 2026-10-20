@@ -54,14 +54,15 @@ export interface GenerationConfig {
 
 export interface ProductionJob {
   id: string
-  job_type: 'script_generation' | 'script_evaluation'
+  job_type: 'script_generation' | 'script_evaluation' | 'audio_generation'
   article_id: string
   source_script_version_id: string | null
   result_script_version_id: string | null
   result_evaluation_id: string | null
+  result_audio_asset_id: string | null
   status: JobStatus
   stage: string
-  config: GenerationConfig | Record<string, string>
+  config: GenerationConfig | Record<string, unknown>
   attempt_count: number
   max_attempts: number
   error_code: string | null
@@ -163,6 +164,61 @@ export interface Approval {
   created_at: string
 }
 
+export interface Voice {
+  id: string
+  name: string
+  provider: string
+  supported_languages: Language[]
+  verified_languages: string[]
+  labels: Record<string, string>
+  preview_url: string | null
+}
+
+export interface AudioAsset {
+  id: string
+  article_id: string
+  article_title: string
+  script_version_id: string
+  script_version: number
+  approval_id: string
+  job_id: string
+  provider: string
+  model: string
+  language: Language
+  voice_id: string
+  voice_name: string
+  speed: number
+  format: string
+  mime_type: string
+  duration_seconds: number
+  file_size: number
+  input_characters: number
+  status: 'available' | 'deleting' | 'delete_failed' | 'deleted'
+  delete_error: string | null
+  created_at: string
+  deleted_at: string | null
+}
+
+export interface AudioCreateResult {
+  job: ProductionJob
+  audio: AudioAsset | null
+  idempotent_replay: boolean
+  reused_existing: boolean
+}
+
+export interface AudioDetail extends AudioAsset {
+  article: ArticleSummary
+  job: ProductionJob
+  provider_calls: {
+    id: string
+    status: string
+    provider_request_id: string | null
+    input_characters: number | null
+    provider_credits: number | null
+    latency_ms: number | null
+  }[]
+}
+
 interface ApiErrorBody {
   code: string
   message: string
@@ -181,6 +237,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   })
+  if (response.status === 204) return undefined as T
   const data: unknown = await response.json()
   if (!response.ok) {
     throw new ApiError(response.status, data as ApiErrorBody)
@@ -189,6 +246,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  voices: (language: Language) => request<{ items: Voice[]; cached: boolean }>(`/tts/voices?language=${language}`),
+  audioList: (params: { scriptId?: string; q?: string; offset?: number } = {}) => {
+    const query = new URLSearchParams({ limit: '20', offset: String(params.offset ?? 0), q: params.q ?? '' })
+    if (params.scriptId) query.set('script_id', params.scriptId)
+    return request<Page<AudioAsset>>(`/audio?${query}`)
+  },
+  audio: (id: string) => request<AudioDetail>(`/audio/${id}`),
+  createAudio: (scriptId: string, body: { language: Language; voice_id: string; speed: number }, key: string) =>
+    request<AudioCreateResult>(`/scripts/${scriptId}/audio`, {
+      method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify(body),
+    }),
+  audioJobs: (scriptId: string) => request<Page<ProductionJob>>(`/jobs?script_id=${scriptId}&type=audio_generation&limit=20&offset=0`),
+  audioStream: (id: string) => `${BASE_URL}/audio/${id}/stream`,
+  audioDownload: (id: string) => `${BASE_URL}/audio/${id}/download`,
+  deleteAudio: (id: string) => request<void>(`/audio/${id}`, { method: 'DELETE' }),
   articles: (offset: number, q: string) =>
     request<Page<ArticleSummary>>(`/articles?limit=20&offset=${offset}&q=${encodeURIComponent(q)}`),
   article: (id: string) => request<Article>(`/articles/${id}`),

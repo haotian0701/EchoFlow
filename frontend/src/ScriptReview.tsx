@@ -186,6 +186,7 @@ export default function ScriptReview() {
       <Link className="rail-icon" title="Content Studio" aria-label="Content Studio" to="/">▦</Link>
       <div className="rail-icon active" title="Script Review" aria-label="Script Review">✓</div>
       <div className="rail-spacer" />
+      <Link className="rail-icon" title="Audio Studio" aria-label="Audio Studio" to="/audio">♫</Link>
       <div className="rail-bottom">03</div>
     </aside>
     <main className="main">
@@ -204,6 +205,7 @@ export default function ScriptReview() {
             <div><span className="job-label">SCRIPT VERSION</span><select value={script.id} onChange={event => navigate(`/review/${event.target.value}`)}>{versions.map(item => <option value={item.id} key={item.id}>Version {item.version} · {item.source}</option>)}</select></div>
             <div className="review-meta"><strong>{article.title}</strong><span>{article.source} · {script.target_language.toUpperCase()} · {script.actual_model}</span></div>
             <div className="toolbar-actions">
+              {reviewStatus === 'Approved' && <Link className="secondary-button review-link" to={`/audio/${script.id}`}>Produce audio</Link>}
               {isLatest && !editing && <button className="secondary-button" type="button" onClick={() => setEditing(true)}>Edit script</button>}
               <button className="primary-button" type="button" disabled={busy || !isLatest || (!!job && !terminalStatuses.has(job.status))} onClick={() => void startEvaluation()}>{evaluation ? 'Re-evaluate' : 'Evaluate'}</button>
             </div>

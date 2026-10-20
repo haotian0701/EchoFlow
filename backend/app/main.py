@@ -8,6 +8,7 @@ from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.articles import router as articles_router
+from app.audio import router as audio_router
 from app.config import get_settings
 from app.database import engine
 from app.errors import (
@@ -19,13 +20,14 @@ from app.errors import (
 from app.jobs import router as jobs_router
 from app.reviews import router as reviews_router
 
-app = FastAPI(title="EchoFlow API", version="0.3.0")
+app = FastAPI(title="EchoFlow API", version="0.4.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in get_settings().cors_origin.split(",")],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH"],
-    allow_headers=["Content-Type", "X-Request-ID", "Idempotency-Key"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_headers=["Content-Type", "X-Request-ID", "Idempotency-Key", "Range"],
+    expose_headers=["Content-Range", "Accept-Ranges", "Content-Disposition", "X-Request-ID"],
 )
 
 
@@ -63,3 +65,4 @@ async def health():
 app.include_router(articles_router)
 app.include_router(jobs_router)
 app.include_router(reviews_router)
+app.include_router(audio_router)

@@ -10,7 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.errors import ApiError
 from app.evaluation_engine import EVALUATION_PROMPT_VERSION, RULE_VERSION
-from app.models import Evaluation, JobEvent, ProductionJob, ScriptVersion, TaskOutbox
+from app.models import (
+    Article,
+    Evaluation,
+    JobEvent,
+    ProductionJob,
+    ScriptVersion,
+    TaskOutbox,
+)
 
 EVALUATION_TASK_NAME = "app.worker.evaluate_script_task"
 
@@ -44,6 +51,7 @@ async def create_evaluation_job(
     script = await session.get(ScriptVersion, script_id)
     if script is None:
         raise ApiError(404, "SCRIPT_NOT_FOUND", "Script version not found")
+    await session.execute(select(Article).where(Article.id == script.article_id).with_for_update())
 
     key = idempotency_key.strip() if idempotency_key else None
     if key is not None and (not key or len(key) > 128):

@@ -1,6 +1,6 @@
 # EchoFlow
 
-EchoFlow is an AI content-to-audio platform. This repository currently implements **stages 1–3: article management, asynchronous script generation, quality evaluation, and human approval**. Audio production is planned next.
+EchoFlow is an AI content-to-audio platform. This repository implements **stages 1–4: article management, asynchronous script generation, quality evaluation, human approval, and MP3 audio delivery**.
 
 ## Run locally
 
@@ -9,7 +9,9 @@ EchoFlow is an AI content-to-audio platform. This repository currently implement
 3. Run `docker compose up --build -d` from the repository root.
 4. Open <http://localhost:5173/>. The API documentation is at <http://localhost:8000/docs>.
 
-Compose starts PostgreSQL and Redis, runs the Alembic migrations, then starts the API, outbox dispatcher, Celery worker, and frontend. PostgreSQL uses the `postgres_data` named volume and Redis uses `redis_data`; `docker compose down` retains saved articles, jobs, events, and scripts. `docker compose down -v` removes both volumes and their data.
+Compose starts PostgreSQL, Redis and MinIO, runs Alembic migrations and private bucket initialization, then starts the API, outbox dispatcher, Celery worker, and frontend. PostgreSQL uses `postgres_data`, Redis uses `redis_data`, and MinIO uses `minio_data`; `docker compose down` retains all three volumes. `docker compose down -v` removes their data.
+
+MinIO is built from the pinned [official source release RELEASE.2025-10-15T17-29-55Z](https://github.com/minio/minio/releases/tag/RELEASE.2025-10-15T17-29-55Z) because the upstream prebuilt images are unavailable. The first build downloads Go and compiles MinIO, so it takes longer; subsequent builds use Docker's cache. Its console is at <http://localhost:9001>, with `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` from `.env` (development defaults: `echoflow` / `local-dev-password`). The S3 port stays internal and the audio bucket is private.
 
 The frontend and API are bound to localhost for this single-user prototype. Frontend dependency installation and its production build happen inside the frontend image; local Node/npm is not required.
 
@@ -46,6 +48,37 @@ Editing creates a new immutable script version and does not copy evaluations or 
 
 The URL importer allows HTTP/HTTPS on standard ports, checks every redirect target against public IP addresses, pins the connection to the checked IP, and limits redirects, time, and response size. Failed fetches and extractions are saved as import attempts with a readable error.
 
+## Audio Studio
+
+Open an approved script in Script Review and choose **Produce audio** to visit `/audio/{script-id}`. Choose a voice and speed (0.7–1.2×, default 1.0), then **Generate audio**. The language follows the script. Only the article's latest script, approved against its latest successful evaluation, can start production. The worker rechecks that approval before synthesis. Later edits or evaluations do not alter existing recordings or their approval references.
+
+The default `TTS_PROVIDER=mock` is independent of `LLM_PROVIDER`. It creates a **two-second demonstration tone**, not a reading of the script, without calling an external service. Real narration requires an ElevenLabs key:
+
+```dotenv
+TTS_PROVIDER=elevenlabs
+ELEVENLABS_API_KEY=your-key
+ELEVENLABS_MODEL=eleven_flash_v2_5
+```
+
+Apply `.env` changes with `docker compose up -d --force-recreate api worker`. A plain `docker compose restart` does not reload environment variables. Keys are sent only to API/worker containers. Real mode never falls back to Mock.
+
+Stage 4 supports `eleven_flash_v2_5` only; its 40,000-character request limit covers the application's 30,000-character script limit. Other model IDs are rejected until their input limits and capabilities are implemented. Output is `mp3_44100_128`. Responses have a configurable 300-second total timeout and 64 MiB limit. The server queries the account's voices and caches them for 300 seconds; voices support both English and German through the multilingual model, while verified accents/languages are separate metadata. Samples are played only on demand.
+
+`/audio` lists recordings, searches article titles, and provides playback, MP3 download, source script and job details. Playback supports HTTP byte ranges through the API; no browser needs a container-only address. Deletion removes the stored file and hides the recording from the library, while retaining metadata, approval references and job history. Failed deletion can be retried. Deleted audio metadata remains queryable by ID; its media endpoints return `410`.
+
+Repeated requests with the same script, provider, model, voice, language, speed and format reuse an active job or an existing available recording. A failed/uncertain job or deleted recording can be replaced using a new idempotency key. Connection failures and HTTP 429/500/502/503/504 receive up to three attempts (5s and 30s delays). Read timeouts or interrupted responses become `needs_attention`; generating again may incur another charge. Storage upload failures retry only the upload, never synthesis. Forced worker termination recovery, general manual retries and scheduled orphan cleanup arrive in Stage 5.
+
+ElevenLabs `character-cost` is saved as provider credits, **not dollars**; monetary cost is left unset when unavailable. Request IDs, input characters, latency and audio duration are persisted without storing script text in provider-call records.
+
+### Manual audio verification
+
+1. In Mock LLM and TTS modes, create an article, generate a script, evaluate it, acknowledge critical issues and approve it.
+2. Choose **Produce audio**, generate, and observe `queued → running → succeeded`. The two-second tone must play, and **Download MP3** must deliver a playable file.
+3. Submit the same configuration again; the existing recording must be reused. Change speed to create another recording.
+4. Refresh `/audio/{script-id}` and `/audio`; job progress and recordings must reload. Use `docker compose down` followed by `docker compose up -d` and verify them again.
+5. Delete one recording and confirm it disappears from the library; `GET /audio/{id}` retains the audit record and `/stream` returns `410`.
+6. Optional paid smoke test: configure ElevenLabs, use one controlled short approved script, and generate once. Verify actual narration and the provider-call request ID/credits. Automated tests never perform paid calls.
+
 ## API
 
 | Endpoint | Purpose |
@@ -69,10 +102,19 @@ The URL importer allows HTTP/HTTPS on standard ports, checks every redirect targ
 | `GET /evaluations/{id}` | Get a complete quality report |
 | `POST /scripts/{id}/approve` | Approve the latest evaluated version |
 | `GET /scripts/{id}/approvals` | List approval history |
+| `GET /tts/voices?language=en` | Current provider voices and cache indicator |
+| `POST /scripts/{id}/audio` | Queue/reuse audio; accepts language, voice_id, speed and Idempotency-Key |
+| `GET /audio` | Paginated audio; q, article_id, script_id and status filters |
+| `GET /audio/{id}` | Metadata, approval reference, article and generating job |
+| `GET /audio/{id}/stream` | Private MP3 playback, including single HTTP byte ranges |
+| `GET /audio/{id}/download` | MP3 attachment with a safe filename |
+| `DELETE /audio/{id}` | Delete file and retain audit metadata; safe to repeat |
 
 New articles return `201`; duplicate content returns `200` with `duplicate: true`. New asynchronous jobs return `202`; an idempotent replay returns the original Job. Errors use `code`, `message`, `details`, and `request_id`; `X-Request-ID` is also returned as a header.
 
 ## Checks
 
-With Python dependencies installed from `backend/requirements-dev.txt`, run `cd backend && pytest -q` and `ruff check .`. Tests use SQLite, fake workers, and mocked HTTP responses; no automated test calls OpenRouter. Docker Compose is the PostgreSQL, Redis, dispatcher, and Celery integration environment.
+With Python dependencies installed from `backend/requirements-dev.txt`, run `cd backend && pytest -q` and `ruff check .`. Tests use SQLite, fake storage and mocked HTTP responses; no automated test calls OpenRouter or ElevenLabs. Docker Compose is the PostgreSQL, Redis, MinIO, dispatcher, and Celery integration environment. Audio tests include approval invalidation, idempotent reuse, provider accounting, Range responses, soft deletion and upload failure without repeated synthesis.
+
+The optional `tests/test_audio_postgres.py` check uses `TEST_POSTGRES_URL` (a local PostgreSQL admin URL with CREATEDB permission). It creates a randomly named temporary database, upgrades Stage 3 data, checks concurrent creation and delivery plus foreign keys/uniqueness, then drops only that temporary database. It never migrates or drops the database named in the supplied URL. This check is skipped by default.
 

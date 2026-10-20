@@ -34,7 +34,10 @@ def error_response(
 
 
 async def api_error_handler(request: Request, exc: ApiError):
-    return error_response(request, exc.status, exc.code, exc.message, exc.details)
+    response = error_response(request, exc.status, exc.code, exc.message, exc.details)
+    if exc.status == 416 and "size" in exc.details:
+        response.headers["Content-Range"] = f"bytes */{exc.details['size']}"
+    return response
 
 
 async def validation_error_handler(request: Request, exc: RequestValidationError):

@@ -1,5 +1,22 @@
 name: echoflow
 
+x-storage-environment: &storage-environment
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-echoflow}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-local-dev-password}
+  MINIO_BUCKET: ${MINIO_BUCKET:-echoflow-audio}
+  MINIO_SECURE: ${MINIO_SECURE:-false}
+
+x-audio-environment: &audio-environment
+  <<: *storage-environment
+  TTS_PROVIDER: ${TTS_PROVIDER:-mock}
+  ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+  ELEVENLABS_MODEL: ${ELEVENLABS_MODEL:-eleven_flash_v2_5}
+  ELEVENLABS_BASE_URL: ${ELEVENLABS_BASE_URL:-https://api.elevenlabs.io}
+  TTS_TIMEOUT_SECONDS: ${TTS_TIMEOUT_SECONDS:-300}
+  TTS_MAX_RESPONSE_BYTES: ${TTS_MAX_RESPONSE_BYTES:-67108864}
+  TTS_VOICE_CACHE_SECONDS: ${TTS_VOICE_CACHE_SECONDS:-300}
+
 services:
   db:
     image: postgres:17-alpine
@@ -39,6 +56,7 @@ services:
   api:
     build: ./backend
     environment:
+      <<: *audio-environment
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://echoflow:local-dev-password@db:5432/echoflow}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173,http://127.0.0.1:5173}
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
@@ -46,6 +64,8 @@ services:
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-google/gemini-2.5-flash}
       OPENROUTER_EVALUATION_MODEL: ${OPENROUTER_EVALUATION_MODEL:-google/gemini-2.5-flash}
     depends_on:
+      minio-init:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
     ports:
@@ -58,8 +78,9 @@ services:
 
   worker:
     build: ./backend
-    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2", "--queues=script_generation,script_evaluation"]
+    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2", "--queues=script_generation,script_evaluation,audio_generation"]
     environment:
+      <<: *audio-environment
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://echoflow:local-dev-password@db:5432/echoflow}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
@@ -71,6 +92,8 @@ services:
       OPENROUTER_HTTP_REFERER: ${OPENROUTER_HTTP_REFERER:-http://localhost:5173}
       OPENROUTER_APP_TITLE: ${OPENROUTER_APP_TITLE:-EchoFlow}
     depends_on:
+      minio-init:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
       redis:
@@ -88,6 +111,32 @@ services:
       redis:
         condition: service_healthy
 
+  minio:
+    build: ./infra/minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-echoflow}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-local-dev-password}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  minio-init:
+    build: ./backend
+    command: ["python", "-m", "app.storage"]
+    environment:
+      <<: *storage-environment
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+
   frontend:
     build: ./frontend
     environment:
@@ -101,4 +150,5 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  minio_data:
 
