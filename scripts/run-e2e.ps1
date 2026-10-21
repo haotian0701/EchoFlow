@@ -31,6 +31,7 @@ try {
     docker @composeArgs up -d --no-build --wait
     if ($LASTEXITCODE -ne 0) { throw 'Isolated Mock environment did not become ready' }
     $testResults = Join-Path $projectRoot ('.tools/e2e-results-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path (Split-Path -Parent $testResults) -Force | Out-Null
     $testArgs = @('-m', 'pytest', 'backend/tests/e2e', '-m', 'e2e', '-q', '--basetemp', $testResults, '-o', "cache_dir=$testResults/pytest-cache")
     if ($Suite -eq 'smoke') { $testArgs += @('-k', 'not recovery') }
     if ($Suite -eq 'recovery') { $testArgs += @('-k', 'recovery') }

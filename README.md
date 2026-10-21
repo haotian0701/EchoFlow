@@ -122,6 +122,16 @@ The backend is organized into `api`, `services`, `integrations`, `evaluation`, `
 
 Full Mock acceptance is now versioned in `backend/tests/e2e/`. Install `backend/requirements-e2e.txt` and Chromium, then run `./scripts/run-e2e.ps1 -Suite all` for production/browser/crash-recovery checks. The runner uses a separate `echoflow-e2e` Compose project, blank keys and independent volumes, and cleans up only its test resources.
 
+### GitHub Actions
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pushes and pull requests. Its parallel checks use Python 3.12 and Node 24, matching the application containers:
+
+- **Backend checks:** Ruff lint/format checks and unit/integration tests, including a disposable PostgreSQL 17 service for migration, concurrency and constraint tests. The JUnit report is retained for seven days.
+- **Frontend build:** `npm ci` followed by TypeScript checking and the Vite production build. The `frontend-dist` artifact is retained for seven days.
+- **Full Mock E2E (manual):** in **Actions → CI → Run workflow**, enable `run_e2e` to also build/start the isolated Compose project and run production, browser and crash-recovery tests. Screenshots and downloaded test audio are retained for seven days.
+
+Push this workflow with the source code to the GitHub repository; no repository-specific URL or Provider secrets are required. CI explicitly uses Mock providers and blank API keys. The workflow checks/builds the application and does not deploy it. Once the workflow exists on the default branch, the manual run option is available; branch protection can require **Backend checks** and **Frontend build**.
+
 
 
 ## Stage 5: deployment and recovery
