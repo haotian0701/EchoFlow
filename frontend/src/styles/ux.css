@@ -1,0 +1,28 @@
+.back-link{display:inline-flex;margin:0 0 18px;color:#386248;font-size:13px;text-decoration:none}
+.back-link:hover{text-decoration:underline}
+.primary-button.review-link{color:#fff;text-decoration:none}
+.job-stage{display:flex;align-items:center;justify-content:space-between;gap:16px;font-size:12px;color:#526254}
+.job-stage span{font-size:11px;color:#788579}
+.production-card,.review-columns,.evaluation-card{scroll-margin-top:24px}
+.script-actions,.toolbar-actions{flex-wrap:wrap}
+.script-preview,.review-meta{min-width:0}
+.content-grid>.card{min-width:0}
+.production-actions{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap}
+.pending-tag.approved{background:#e7f2e8;color:#346142}
+.pending-tag.superseded{background:#edf0ed;color:#69776e}
+.review-meta strong{overflow-wrap:anywhere}
+.notice button{background:#fff;border:1px solid currentColor;border-radius:5px;padding:6px 9px;margin-left:10px;color:inherit}
+.notice a{margin-left:12px;color:inherit}
+.confirm-dialog{border:1px solid #dce1d8;border-radius:16px;padding:28px;max-width:500px;width:calc(100% - 36px);background:#fbfcf9;color:#27342b;box-shadow:0 20px 70px #1c322b40}
+.confirm-dialog::backdrop{background:#1c322b75}
+.confirm-dialog h2{font:500 25px/1.3 'Playfair Display',Georgia,serif;margin:0 0 12px}
+.confirm-dialog p{font-size:14px;line-height:1.7}
+.dialog-actions{display:flex;justify-content:flex-end;gap:12px;margin-top:24px;flex-wrap:wrap}
+.review-text mark:focus{outline:2px solid #8d6c24;outline-offset:3px}
+.edit-area>p{font-size:12px;color:#657169;line-height:1.5}
+.approved-panel .review-link{margin-top:12px}
+.production-feedback{margin:16px 0}
+.review-status.unavailable{background:#f2f0e9;color:#74694d}
+button:focus-visible,a:focus-visible{outline:2px solid #679477;outline-offset:4px}
+@media(max-width:650px){.job-stage{align-items:flex-start;flex-direction:column;gap:6px}.toolbar-actions .primary-button,.script-actions .primary-button{justify-content:center;white-space:normal;text-align:center}.dialog-actions>*{flex:1}.notice a{display:inline-flex;margin-top:8px}}
+@media(max-width:1000px){.content-grid{grid-template-columns:minmax(0,1fr)}}

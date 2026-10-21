@@ -1,219 +1,158 @@
-import { FormEvent, useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
-import {
-  api, ApiError, Article, ArticleSummary, GenerationConfig, ImportAttempt,
-  JobEvent, Language, ProductionJob, ScriptSummary, ScriptVersion,
-} from '../api'
+import { FormEvent, useEffect, useRef, useState } from 'react'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { api, ApiError, GenerationConfig, Language, ProductionJob } from '../api'
+import { readReview } from '../api/review'
+import { useResource } from '../hooks/useResource'
+import { activeJob, nextAction, reviewLabels, reviewState } from '../domain/review'
+import { jobUrl, pageOffset, studioUrl, withStudio } from '../domain/navigation'
+import { submitRequest } from '../domain/idempotency'
+import JobProgress from '../components/JobProgress'
 
 type EntryMode = 'manual' | 'url'
-
-function dateTime(value: string) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
-}
-
-function shortHost(url: string) {
-  try { return new URL(url).hostname } catch { return url }
-}
-
-const terminalStatuses = new Set(['succeeded', 'failed', 'needs_attention'])
-
-function duration(seconds: number) {
-  const minutes = Math.floor(seconds / 60)
-  const remainder = seconds % 60
-  return `${minutes}:${remainder.toString().padStart(2, '0')}`
-}
+const dateTime = (value: string) => new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
+function shortHost(url: string) { try { return new URL(url).hostname } catch { return url } }
+function duration(seconds: number) { return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` }
 
 export default function ContentStudio() {
+  const [params, setParams] = useSearchParams()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const articleId = params.get('articleId') || ''
+  const requestedScript = params.get('scriptId') || ''
+  const section = params.get('section')
+  const offset = pageOffset(params.get('offset'))
+  const importOffset = pageOffset(params.get('importOffset'))
+  const query = params.get('q') || ''
+  const activePanel = params.get('tab') === 'imports' ? 'imports' : 'articles'
+  const productionRef = useRef<HTMLElement>(null)
+  const scrolledSelection = useRef('')
+  const route = useRef(''); route.current = articleId + ':' + requestedScript
+  const mutation = useRef(false)
+  const savedNotice = useRef<string | null>(null)
   const [mode, setMode] = useState<EntryMode>('manual')
   const [title, setTitle] = useState('')
   const [source, setSource] = useState('')
   const [text, setText] = useState('')
   const [url, setUrl] = useState('')
   const [language, setLanguage] = useState<Language>('en')
-  const [articles, setArticles] = useState<ArticleSummary[]>([])
-  const [imports, setImports] = useState<ImportAttempt[]>([])
-  const [importTotal, setImportTotal] = useState(0)
-  const [importOffset, setImportOffset] = useState(0)
-  const [total, setTotal] = useState(0)
-  const [offset, setOffset] = useState(0)
-  const [search, setSearch] = useState('')
-  const [query, setQuery] = useState('')
-  const [selected, setSelected] = useState<Article | null>(null)
-  const [activePanel, setActivePanel] = useState<'articles' | 'imports'>('articles')
+  const [search, setSearch] = useState(query)
   const [busy, setBusy] = useState(false)
   const [generationBusy, setGenerationBusy] = useState(false)
-  const [generationConfig, setGenerationConfig] = useState<GenerationConfig>({
-    target_language: 'en', length: 'short', style: 'news', audience: 'general',
-  })
-  const [job, setJob] = useState<ProductionJob | null>(null)
-  const [jobEvents, setJobEvents] = useState<JobEvent[]>([])
-  const [scripts, setScripts] = useState<ScriptSummary[]>([])
-  const [script, setScript] = useState<ScriptVersion | null>(null)
-  const [reviewStatuses, setReviewStatuses] = useState<Record<string, string>>({})
+  const [acceptedJob, setAcceptedJob] = useState<ProductionJob | null>(null)
+  const [generationConfig, setGenerationConfig] = useState<GenerationConfig>({ target_language: 'en', length: 'short', style: 'news', audience: 'general' })
   const [notice, setNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
+  const patchUrl = (values: Record<string, string | null>, replace = false) => setParams(current => {
+    const next = new URLSearchParams(current)
+    for (const [key, value] of Object.entries(values)) value === null ? next.delete(key) : next.set(key, value)
+    return next
+  }, { replace })
+  const setOffset = (value: number) => patchUrl({ offset: String(value) })
+  const setImportOffset = (value: number) => patchUrl({ importOffset: String(value) })
+  const setActivePanel = (value: string) => patchUrl({ tab: value })
 
-  async function refreshArticles(nextOffset = offset, nextQuery = query) {
-    const page = await api.articles(nextOffset, nextQuery)
-    setArticles(page.items)
-    setTotal(page.total)
-  }
+  const library = useResource(`library:${offset}:${query}:${importOffset}`, async signal => {
+    const [articles, imports] = await Promise.all([api.articles(offset, query, signal), api.imports(importOffset, signal)])
+    return { articles, imports }
+  })
+  const article = useResource(articleId || null, signal => api.article(articleId, signal))
+  const production = useResource(articleId ? route.current : null, async signal => {
+    const [jobs, scripts] = await Promise.all([api.jobs(articleId, signal), api.scripts(articleId, signal)])
+    const scriptId = requestedScript || scripts.items[0]?.id
+    const script = scriptId ? await api.script(scriptId, signal) : null
+    if (script && script.article_id !== articleId) throw new Error('This script does not belong to the selected article. Select another article or return to the latest version.')
+    const review = script ? await readReview(script.id, signal) : null
+    const job = jobs.items[0] || null
+    const timeline = job ? await api.jobEvents(job.id, signal).catch(() => ({ items: [], unavailable: true })) : { items: [] }
+    return { scripts: scripts.items, script, job, review, events: timeline.items, timelineUnavailable: 'unavailable' in timeline }
+  }, data => activeJob(data.job) || activeJob(data.review?.job))
+  const selected = article.data
+  const articles = library.data?.articles.items || []
+  const imports = library.data?.imports.items || []
+  const total = library.data?.articles.total || 0
+  const importTotal = library.data?.imports.total || 0
+  const scripts = production.data?.scripts || []
+  const script = production.data?.script || null
+  const job = acceptedJob?.article_id === articleId ? acceptedJob : production.data?.job || null
+  const jobEvents = production.data?.events || []
+  const review = production.data?.review
+  const statusUnavailable = !!production.error || production.loading || !!article.error
+  const state = reviewState(scripts[0]?.id === script?.id, review?.evaluation || null, review?.approvals || [], review?.job, statusUnavailable)
+  const studio = script && selected ? studioUrl(selected.id, script.id, location.pathname + location.search) : location.pathname + location.search
+  const reviewPath = script ? withStudio(`/review/${script.id}`, studio) : '/'
+  const reviewStatuses = Object.fromEntries(scripts.map(item => [item.id, item.id === scripts[0]?.id ? (item.id === script?.id ? reviewLabels[state] : 'Open to check status') : 'Superseded']))
 
-  async function refreshImports(nextOffset = importOffset) {
-    const page = await api.imports(nextOffset)
-    setImports(page.items)
-    setImportTotal(page.total)
-  }
-
+  useEffect(() => { setSearch(query) }, [query])
+  useEffect(() => { if (savedNotice.current !== articleId) setNotice(null); savedNotice.current = null; setAcceptedJob(null) }, [articleId])
+  useEffect(() => { if (selected) setGenerationConfig(current => ({ ...current, target_language: selected.language })) }, [selected?.id])
+  useEffect(() => { if (acceptedJob && production.data?.job?.id === acceptedJob.id) setAcceptedJob(null) }, [production.data, acceptedJob])
   useEffect(() => {
-    void Promise.all([refreshArticles(offset, query), refreshImports(importOffset)]).catch(() => {
-      setNotice({ kind: 'error', text: 'Could not load the studio. Check that the API is running.' })
-    })
-  }, [offset, query, importOffset])
-
+    if (script && !requestedScript && !activeJob(job)) patchUrl({ scriptId: script.id }, true)
+  }, [script?.id, requestedScript, job?.status])
   useEffect(() => {
-    if (!selected) {
-      setJob(null)
-      setJobEvents([])
-      setScripts([])
-      setScript(null)
-      setReviewStatuses({})
-      return
+    const selection = `${articleId}:${requestedScript}:${section}`
+    if (selected && production.data && !production.loading && section === 'production' && scrolledSelection.current !== selection) {
+      productionRef.current?.scrollIntoView({ block: 'start', behavior: 'instant' })
+      scrolledSelection.current = selection
     }
-    setGenerationConfig(current => ({ ...current, target_language: selected.language }))
-    void loadProduction(selected.id)
-  }, [selected?.id])
-
-  useEffect(() => {
-    if (!job || terminalStatuses.has(job.status)) return
-    const timer = window.setInterval(() => {
-      void refreshJob(job.id)
-    }, 2000)
-    return () => window.clearInterval(timer)
-  }, [job?.id, job?.status])
-
-  async function loadProduction(articleId: string) {
-    try {
-      const [jobPage, scriptPage] = await Promise.all([api.jobs(articleId), api.scripts(articleId)])
-      const latestJob = jobPage.items[0] || null
-      setJob(latestJob)
-      setScripts(scriptPage.items)
-      await loadReviewStatuses(scriptPage.items)
-      setJobEvents(latestJob ? (await api.jobEvents(latestJob.id)).items : [])
-      const scriptId = latestJob?.result_script_version_id || scriptPage.items[0]?.id
-      setScript(scriptId ? await api.script(scriptId) : null)
-    } catch (error) {
-      setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Could not load script production.' })
-    }
-  }
-
-  async function loadReviewStatuses(items: ScriptSummary[]) {
-    const entries = await Promise.all(items.map(async (item, index) => {
-      if (index > 0) return [item.id, 'Superseded'] as const
-      const evaluations = await api.evaluations(item.id, 1)
-      const latest = evaluations.items[0]
-      if (!latest) return [item.id, 'Pending evaluation'] as const
-      if (latest.status === 'queued' || latest.status === 'running') return [item.id, 'Evaluating'] as const
-      if (latest.status === 'failed') return [item.id, 'Evaluation failed'] as const
-      if (latest.status === 'needs_attention') return [item.id, 'Needs attention'] as const
-      const approvals = await api.approvals(item.id)
-      return [item.id, approvals.items.some(approval => approval.evaluation_id === latest.id) ? 'Approved' : 'Pending review'] as const
-    }))
-    setReviewStatuses(Object.fromEntries(entries))
-  }
-
-  async function refreshJob(id: string) {
-    try {
-      const [nextJob, events] = await Promise.all([api.job(id), api.jobEvents(id)])
-      setJob(nextJob)
-      setJobEvents(events.items)
-      if (nextJob.status === 'succeeded' && nextJob.result_script_version_id && selected) {
-        const [nextScript, scriptPage] = await Promise.all([
-          api.script(nextJob.result_script_version_id), api.scripts(selected.id),
-        ])
-        setScript(nextScript)
-        setScripts(scriptPage.items)
-        await loadReviewStatuses(scriptPage.items)
-      }
-    } catch (error) {
-      setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Could not refresh the generation job.' })
-    }
-  }
+  }, [selected?.id, requestedScript, section, production.loading, !!production.data])
 
   async function generate(regenerate = false) {
-    if (!selected) return
-    setGenerationBusy(true)
-    setNotice(null)
+    if (!selected || mutation.current || activeJob(job) || statusUnavailable) return
+    mutation.current = true; setGenerationBusy(true); setNotice(null)
+    const currentRoute = route.current
     try {
-      const key = crypto.randomUUID()
       const result = regenerate && script
-        ? await api.regenerate(script.id, generationConfig, key)
-        : await api.createScriptJob(selected.id, generationConfig, key)
-      setJob(result.job)
-      setJobEvents((await api.jobEvents(result.job.id)).items)
-      setNotice({ kind: 'success', text: regenerate ? 'A new script version is queued.' : 'Script generation is queued.' })
+        ? await submitRequest('regenerate', script.id, generationConfig, key => api.regenerate(script.id, generationConfig, key))
+        : await submitRequest('generate', selected.id, generationConfig, key => api.createScriptJob(selected.id, generationConfig, key))
+      if (route.current !== currentRoute) return
+      setAcceptedJob(result.job)
+      patchUrl({ scriptId: null, section: 'production' }, true)
+      production.refresh()
+      setNotice({ kind: 'success', text: 'Script generation accepted. You can leave this page while it runs.' })
     } catch (error) {
-      const message = error instanceof ApiError ? error.body.message : error instanceof Error ? error.message : 'Could not start generation.'
-      setNotice({ kind: 'error', text: message })
-    } finally {
-      setGenerationBusy(false)
-    }
+      if (route.current === currentRoute) setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Could not start generation.' })
+    } finally { mutation.current = false; setGenerationBusy(false) }
   }
 
-  async function selectScript(id: string) {
+  async function startEvaluation() {
+    if (!script || mutation.current || statusUnavailable) return
+    mutation.current = true; setGenerationBusy(true); setNotice(null)
+    const currentRoute = route.current
     try {
-      setScript(await api.script(id))
+      await submitRequest('evaluate', script.id, {}, key => api.evaluate(script.id, key))
+      if (route.current === currentRoute) navigate(reviewPath)
     } catch (error) {
-      setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Could not load the script.' })
-    }
+      if (route.current === currentRoute) setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Could not start evaluation.' })
+    } finally { mutation.current = false; setGenerationBusy(false) }
   }
 
-  async function selectArticle(id: string) {
-    try {
-      const article = await api.article(id)
-      setSelected(article)
-      setNotice(null)
-    } catch (error) {
-      setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Could not load article.' })
-    }
-  }
+  function selectScript(id: string) { patchUrl({ scriptId: id, section: 'production' }) }
+  function selectArticle(id: string) { patchUrl({ articleId: id, scriptId: null, section: 'production' }) }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setBusy(true)
-    setNotice(null)
+    if (busy) return
+    setBusy(true); setNotice(null)
     try {
-      const result = mode === 'manual'
-        ? await api.create({ title, text, source, language })
-        : await api.import({ url, title: title || undefined, source: source || undefined, language })
-      setSelected(result.article)
-      setNotice({
-        kind: 'success',
-        text: result.duplicate ? 'This content already exists. The saved article is open.' : 'Article saved and ready for the next stage.',
-      })
-      setTitle('')
-      setSource('')
-      setText('')
-      setUrl('')
-      setOffset(0)
-      setImportOffset(0)
-      await Promise.all([refreshArticles(0, query), refreshImports(0)])
+      const result = mode === 'manual' ? await api.create({ title, text, source, language }) : await api.import({ url, title: title || undefined, source: source || undefined, language })
+      savedNotice.current = result.article.id
+      patchUrl({ articleId: result.article.id, scriptId: null, section: 'production', offset: '0', importOffset: '0' })
+      setNotice({ kind: 'success', text: result.duplicate ? 'This content already exists. The saved article is open.' : 'Article saved. Configure your audio script below.' })
+      setTitle(''); setSource(''); setText(''); setUrl('')
+      library.refresh(); article.refresh(); production.refresh()
     } catch (error) {
       const message = error instanceof ApiError ? error.body.message : error instanceof Error ? error.message : 'The request failed.'
       setNotice({ kind: 'error', text: mode === 'url' ? `${message} You can paste the article text instead.` : message })
-      if (mode === 'url') {
-        setImportOffset(0)
-        await refreshImports(0).catch(() => undefined)
-      }
-    } finally {
-      setBusy(false)
-    }
+      if (mode === 'url') library.refresh()
+    } finally { setBusy(false) }
   }
 
-  function searchArticles(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setOffset(0)
-    setQuery(search.trim())
-  }
+  function searchArticles(event: FormEvent<HTMLFormElement>) { event.preventDefault(); patchUrl({ offset: '0', q: search.trim() }) }
+  const scriptAction = script ? (state === 'pending_evaluation' ? <button type="button" className="primary-button" disabled={generationBusy || statusUnavailable || activeJob(job)} onClick={() => void startEvaluation()}>Start evaluation</button>
+                      : state === 'approved' ? <Link className="primary-button review-link" to={withStudio(`/audio/${script.id}`, studio)}>Produce audio</Link>
+                      : state === 'superseded' ? <button className="primary-button" onClick={() => selectScript(scripts[0].id)}>Return to latest version</button>
+                      : state === 'unavailable' ? <button className="primary-button" onClick={production.refresh}>Refresh status</button>
+                      : <Link className="primary-button review-link" to={review?.job && ['evaluation_failed', 'needs_attention'].includes(state) ? jobUrl(review.job.id, location.pathname + location.search) : reviewPath}>{nextAction(state)}</Link>) : null
 
   return (
     <div className="app-shell">
@@ -239,6 +178,7 @@ export default function ContentStudio() {
             <p className="intro-copy">Start with the article. Keep its original words, source and language in one place before creating an audio script.</p>
           </section>
 
+          {(library.error || article.error || production.error) && <div className="notice error" role="alert">{article.error || production.error || library.error} Status cannot be confirmed. <button onClick={() => { library.refresh(); article.refresh(); production.refresh() }}>Refresh status</button><Link to="/">Back to content</Link></div>}
           {notice && <div className={`notice ${notice.kind}`} role="status">{notice.text}</div>}
 
           <div className="content-grid">
@@ -305,27 +245,30 @@ export default function ContentStudio() {
             </div> : <p className="detail-placeholder">Select a saved article to read its original text here.</p>}
           </section>
 
-          <section className="card production-card">
+          <section className="card production-card" ref={productionRef} id="production">
             <div className="card-heading">
               <div><p className="section-number">04 / SCRIPT GENERATION</p><h2>Prepare the audio script</h2></div>
-              {script && <span className="pending-tag">Pending evaluation · Stage 3</span>}
+              {script && <div className="production-actions"><span className={`pending-tag ${state}`}>{reviewLabels[state]}</span>{scriptAction}</div>}
             </div>
+            {notice && selected && <div className={`notice ${notice.kind} production-feedback`} role="status">{notice.text}</div>}
+            {production.error && <div className="notice error">{production.error} <button onClick={production.refresh}>Refresh status</button><Link to="/">Back to content</Link></div>}
             {!selected ? <p className="detail-placeholder">Select an article to generate an audio script.</p> : <>
               <div className="generation-controls">
                 <label className="field">Target language<select value={generationConfig.target_language} onChange={event => setGenerationConfig({ ...generationConfig, target_language: event.target.value as Language })}><option value="en">English</option><option value="de">German</option></select></label>
                 <label className="field">Length<select value={generationConfig.length} onChange={event => setGenerationConfig({ ...generationConfig, length: event.target.value as GenerationConfig['length'] })}><option value="short">Short · ~2 min</option><option value="medium">Medium · ~5 min</option><option value="long">Long · ~9 min</option></select></label>
                 <label className="field">Style<select value={generationConfig.style} onChange={event => setGenerationConfig({ ...generationConfig, style: event.target.value as GenerationConfig['style'] })}><option value="news">News</option><option value="conversational">Conversational</option><option value="professional">Professional</option></select></label>
                 <label className="field">Audience<select value={generationConfig.audience} onChange={event => setGenerationConfig({ ...generationConfig, audience: event.target.value as GenerationConfig['audience'] })}><option value="general">General audience</option><option value="business">Business audience</option></select></label>
-                <button className="primary-button generate-button" type="button" disabled={generationBusy || (!!job && !terminalStatuses.has(job.status))} onClick={() => void generate(false)}>{generationBusy ? 'Queuing…' : 'Generate script →'}</button>
+                <button className={`${script ? 'secondary-button' : 'primary-button'} generate-button`} type="button" disabled={generationBusy || statusUnavailable || activeJob(job)} onClick={() => void generate(false)}>{generationBusy ? 'Queuing…' : 'Generate script →'}</button>
               </div>
 
               {job && <div className={`job-card ${job.status}`}>
-                <div className="job-summary"><div><span className="job-label">LATEST JOB · <Link to={`/jobs/${job.id}`}>Details ↗</Link></span><strong>{job.status.replace('_', ' ')}</strong></div><span>Attempt {job.attempt_count} / {job.max_attempts}</span></div>
-                <div className="progress-track"><span style={{ width: job.status === 'succeeded' ? '100%' : job.status === 'running' ? '62%' : job.status === 'queued' || job.status === 'retry_scheduled' ? '25%' : '100%' }} /></div>
+                <div className="job-summary"><div><span className="job-label">LATEST JOB · <Link to={jobUrl(job.id, location.pathname + location.search)}>Details ↗</Link></span><strong>{job.status.replace('_', ' ')}</strong></div></div>
+                <JobProgress job={job} />
                 {job.error_message && <p className="job-error">{job.error_message}{job.status === 'needs_attention' ? ' A new request may create another provider charge.' : ''}</p>}
                 <div className="event-list">{jobEvents.map(event => <div key={event.id}><time>{dateTime(event.created_at)}</time><span>{event.message}</span></div>)}</div>
               </div>}
 
+              {production.data?.timelineUnavailable && <p role="status">Timeline unavailable. Your task is still saved.</p>}
               <div className="script-workspace">
                 <aside className="version-list">
                   <span className="job-label">VERSIONS</span>
@@ -333,7 +276,8 @@ export default function ContentStudio() {
                 </aside>
                 <div className="script-preview">
                   {script ? <>
-                    <div className="script-meta"><div><h3>Script version {script.version}</h3><p>{script.provider} · {script.actual_model} · {duration(script.estimated_duration_seconds)}</p></div><div className="script-actions"><Link className="secondary-button review-link" to={`/review/${script.id}`}>Review</Link><button type="button" className="secondary-button" disabled={generationBusy || (!!job && !terminalStatuses.has(job.status))} onClick={() => void generate(true)}>Regenerate</button></div></div>
+                    <div className="script-meta"><div><h3>Script version {script.version}</h3><p>{script.provider} · {script.actual_model} · {duration(script.estimated_duration_seconds)}</p></div><div className="script-actions">
+                      <Link className="secondary-button review-link" to={reviewPath}>Review</Link><button type="button" className="secondary-button" disabled={generationBusy || statusUnavailable || activeJob(job)} onClick={() => void generate(true)}>Regenerate</button></div></div>
                     <div className="script-body">{script.text}</div>
                   </> : <p className="detail-placeholder">Configure the script and start generation. Progress and results remain available after refresh.</p>}
                 </div>

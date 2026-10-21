@@ -34,17 +34,23 @@ Generation jobs move through `queued`, `running`, `retry_scheduled`, and a termi
 
 ## Evaluation and review
 
-Open a saved script with **Review** to use the dedicated `/review/{script-id}` workspace. Evaluation is deliberately manual: generating or editing a script leaves it in `Pending evaluation` until **Evaluate** is clicked. The asynchronous evaluation combines deterministic checks for length, narration format, sentence length, and numbers with an LLM Judge report for factual consistency, content coverage, and audio readiness.
+After generation, click **Start evaluation** in Content Studio to submit one evaluation and open `/review/{script-id}`. **Review** opens the script without starting a call. Evaluation is deliberately manual: generating, editing, navigating or refreshing never starts it automatically. The asynchronous evaluation combines deterministic checks for length, narration format, sentence length, and numbers with an LLM Judge report for factual consistency, content coverage, and audio readiness.
 
 In Mock mode, `mock/evaluator-v1` produces stable scores from the deterministic findings and never calls an external service. In OpenRouter mode, the Judge uses `OPENROUTER_EVALUATION_MODEL`; it can differ from the script generation model. Scores are estimates and never approve a script automatically.
 
 Editing creates a new immutable script version and does not copy evaluations or approvals. Only the latest version can be edited or approved. Approval requires the latest evaluation attempt to have succeeded, and every critical issue must be explicitly acknowledged. Starting another evaluation preserves earlier approvals as audit history but makes them stale until the new report is approved.
+
+The primary action follows the current version's state: **Start evaluation**, **Review issues**, or **Produce audio**. Re-evaluating an approved script asks for confirmation because its current approval will become historical. Historical versions are marked **Superseded** and link back to the latest version. Click a report issue to highlight and scroll to its script quotation/source evidence; absent evidence is explicitly marked. Unsaved script edits are protected when navigating, changing versions or refreshing; cancelling navigation retains the draft, and a save conflict does not overwrite it.
 
 ## Content Studio
 
 - **Paste text:** enter a title, source, original language (English or German), and 100–30,000 characters of article text.
 - **Import URL:** enter a public static HTML article URL. The title and source can be overridden; otherwise they come from the page and its host. Login-only and JavaScript-rendered pages should be pasted manually.
 - **Library:** search saved titles, inspect the full original text, and review URL import history. Repeated normalized content returns the existing article without creating another row.
+
+Selecting or saving an article scrolls to script production. The homepage URL stores `articleId`, optional `scriptId`, `section=production`, title search `q`, `offset`, `tab` and `importOffset`, so refresh and browser history restore the selection and list context. Review/Audio links carry a `studio` return URL; task details carry `returnTo` and retain it across the retry chain. **Back to this article** restores that context. Invalid deep links show an error instead of silently opening a different article/version.
+
+Active production polls every two seconds and shows real stages instead of an estimated percentage. Read errors preserve existing results, flag unconfirmed status and recover automatically. Rapid selection changes cancel/ignore obsolete reads. Generation, regeneration, evaluation and audio submissions retain a hashed request fingerprint and UUID in sessionStorage after an uncertain response; a repeat submission reuses that key. No article/script text, Prompt or API key is stored there. Successful submissions are retained even when the subsequent timeline read fails. Failed/uncertain jobs continue to use Job Monitor for recovery.
 
 The URL importer allows HTTP/HTTPS on standard ports, checks every redirect target against public IP addresses, pins the connection to the checked IP, and limits redirects, time, and response size. Failed fetches and extractions are saved as import attempts with a readable error.
 
@@ -116,6 +122,8 @@ New articles return `201`; duplicate content returns `200` with `duplicate: true
 
 With Python dependencies installed from `backend/requirements-dev.txt`, run `cd backend && pytest -q` and `ruff check .`. Tests use SQLite, fake storage and mocked HTTP responses; no automated test calls OpenRouter or ElevenLabs. Docker Compose is the PostgreSQL, Redis, MinIO, dispatcher, and Celery integration environment. Audio tests include approval invalidation, idempotent reuse, provider accounting, Range responses, soft deletion and upload failure without repeated synthesis.
 
+Frontend unit tests cover review/action states, safe return links, Unicode evidence offsets and request-key lifecycle. Run `npm test` in `frontend`, or `docker compose run --rm --no-deps frontend npm test` after building the image. `npm run build` checks TypeScript and builds production assets. The isolated smoke suite also checks one-click evaluation, approval invalidation, context restoration, unsaved/conflicting edits, lost POST responses, visible evidence and delayed article responses.
+
 The optional `backend/tests/integration/postgres/` checks use `TEST_POSTGRES_URL` (a local PostgreSQL admin URL with CREATEDB permission). They create randomly named temporary databases, test existing data upgrades, concurrent task/audio operations and database constraints, then drop only those temporary databases. They never migrate or drop the database named in the supplied URL. These checks are skipped by default.
 
 The backend is organized into `api`, `services`, `integrations`, `evaluation`, `models`, `schemas`, `db`, `core` and `tasks`. The frontend separates pages, shared components, API contracts/client and styles. See [Repository structure and test commands](docs/architecture.md) for dependency rules, entrypoints and test ownership.
@@ -127,7 +135,7 @@ Full Mock acceptance is now versioned in `backend/tests/e2e/`. Install `backend/
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pushes and pull requests. Its parallel checks use Python 3.12 and Node 24, matching the application containers:
 
 - **Backend checks:** Ruff lint/format checks and unit/integration tests, including a disposable PostgreSQL 17 service for migration, concurrency and constraint tests. The JUnit report is retained for seven days.
-- **Frontend build:** `npm ci` followed by TypeScript checking and the Vite production build. The `frontend-dist` artifact is retained for seven days.
+- **Frontend build:** `npm ci`, TypeScript checking, the Vite production build and Vitest unit tests. The `frontend-dist` artifact is retained for seven days.
 - **Full Mock E2E (manual):** in **Actions → CI → Run workflow**, enable `run_e2e` to also build/start the isolated Compose project and run production, browser and crash-recovery tests. Screenshots and downloaded test audio are retained for seven days.
 
 Push this workflow with the source code to the GitHub repository; no repository-specific URL or Provider secrets are required. CI explicitly uses Mock providers and blank API keys. The workflow checks/builds the application and does not deploy it. Once the workflow exists on the default branch, the manual run option is available; branch protection can require **Backend checks** and **Frontend build**.

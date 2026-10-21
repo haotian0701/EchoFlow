@@ -35,6 +35,8 @@ frontend/src/
   pages/                     Content, Review, Audio, Jobs and Dashboard pages
   components/                Shared visual components
   api/                       HTTP client and separate TypeScript contracts
+    domain/                    Shared review states, navigation, evidence offsets and request keys
+    hooks/                     Cancellable resource reads and sequential task polling
   styles/                    Shared and page-specific styles
 scripts/
   run-e2e.ps1                Isolated Mock Compose acceptance runner
@@ -87,6 +89,8 @@ From the repository root:
 .venv/Scripts/python.exe -m pytest backend -q
 .venv/Scripts/python.exe -m ruff check backend/app backend/tests
 ```
+
+Frontend pure-logic tests live in `frontend/tests/` and use Vitest's Node environment. Run `npm test` in `frontend`, or `docker compose run --rm --no-deps frontend npm test` after building. CI runs these tests alongside TypeScript/production checks. Browser interaction coverage remains in the opt-in Mock E2E suite.
 
 PostgreSQL checks are separated into migration, task concurrency, and audio concurrency/constraints. Set `TEST_POSTGRES_URL` to a local admin connection with CREATEDB permission, then run:
 
