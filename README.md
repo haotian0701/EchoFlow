@@ -42,11 +42,15 @@ Editing creates a new immutable script version and does not copy evaluations or 
 
 The primary action follows the current version's state: **Start evaluation**, **Review issues**, or **Produce audio**. Re-evaluating an approved script asks for confirmation because its current approval will become historical. Historical versions are marked **Superseded** and link back to the latest version. Click a report issue to highlight and scroll to its script quotation/source evidence; absent evidence is explicitly marked. Unsaved script edits are protected when navigating, changing versions or refreshing; cancelling navigation retains the draft, and a save conflict does not overwrite it.
 
+Reports show critical issues first, then warnings and information. Use **All / Critical / Warning / Info** to filter the list; counts and approval requirements always use the full report. Filtering retains acknowledgements, and a new evaluation resets the filter to All. Every critical issue still needs its own acknowledgement.
+
 ## Content Studio
 
 - **Paste text:** enter a title, source, original language (English or German), and 100–30,000 characters of article text.
 - **Import URL:** enter a public static HTML article URL. The title and source can be overridden; otherwise they come from the page and its host. Login-only and JavaScript-rendered pages should be pasted manually.
 - **Library:** search saved titles, inspect the full original text, and review URL import history. Repeated normalized content returns the existing article without creating another row.
+
+**Add an article** expands or collapses the input form without clearing its fields. Selecting or saving an article collapses the form; a failed import keeps it open with your input. Article metadata stays visible, while **Read original article** expands the original text. Across pages, the shared **Content / Audio / Jobs / Dashboard** navigation uses text labels, with a horizontal navigation bar on narrow screens.
 
 Selecting or saving an article scrolls to script production. The homepage URL stores `articleId`, optional `scriptId`, `section=production`, title search `q`, `offset`, `tab` and `importOffset`, so refresh and browser history restore the selection and list context. Review/Audio links carry a `studio` return URL; task details carry `returnTo` and retain it across the retry chain. **Back to this article** restores that context. Invalid deep links show an error instead of silently opening a different article/version.
 
@@ -57,6 +61,8 @@ The URL importer allows HTTP/HTTPS on standard ports, checks every redirect targ
 ## Audio Studio
 
 Open an approved script in Script Review and choose **Produce audio** to visit `/audio/{script-id}`. Choose a voice and speed (0.7–1.2×, default 1.0), then **Generate audio**. The language follows the script. Only the article's latest script, approved against its latest successful evaluation, can start production. The worker rechecks that approval before synthesis. Later edits or evaluations do not alter existing recordings or their approval references.
+
+Recordings appear before the production form and job logs, with playback, MP3 download and version metadata. With an available recording, expand **Create another voice version** to produce another configuration; without one, the form starts open. A manual expansion and voice/speed choices survive background refreshes. **Task events** expands the full audio timeline; the current stage and errors remain visible. A recording-list connection error preserves displayed results and offers **Refresh recordings**, without changing a successful job to failed. Failed jobs continue to link to Job Monitor for recovery.
 
 The default `TTS_PROVIDER=mock` is independent of `LLM_PROVIDER`. It creates a **two-second demonstration tone**, not a reading of the script, without calling an external service. Real narration requires an ElevenLabs key:
 
@@ -122,7 +128,7 @@ New articles return `201`; duplicate content returns `200` with `duplicate: true
 
 With Python dependencies installed from `backend/requirements-dev.txt`, run `cd backend && pytest -q` and `ruff check .`. Tests use SQLite, fake storage and mocked HTTP responses; no automated test calls OpenRouter or ElevenLabs. Docker Compose is the PostgreSQL, Redis, MinIO, dispatcher, and Celery integration environment. Audio tests include approval invalidation, idempotent reuse, provider accounting, Range responses, soft deletion and upload failure without repeated synthesis.
 
-Frontend unit tests cover review/action states, safe return links, Unicode evidence offsets and request-key lifecycle. Run `npm test` in `frontend`, or `docker compose run --rm --no-deps frontend npm test` after building the image. `npm run build` checks TypeScript and builds production assets. The isolated smoke suite also checks one-click evaluation, approval invalidation, context restoration, unsaved/conflicting edits, lost POST responses, visible evidence and delayed article responses.
+Frontend unit tests cover review/action states, issue sorting/filtering, safe return links, Unicode evidence offsets and request-key lifecycle. Run `npm test` in `frontend`, or `docker compose run --rm --no-deps frontend npm test` after building the image. `npm run build` checks TypeScript and builds production assets. The isolated smoke suite also checks one-click evaluation, approval invalidation, context restoration, unsaved/conflicting edits, lost POST responses, visible evidence, delayed article responses, collapsible inputs, labeled navigation, complete approval requirements under filtering, and recordings-first playback/error handling.
 
 The optional `backend/tests/integration/postgres/` checks use `TEST_POSTGRES_URL` (a local PostgreSQL admin URL with CREATEDB permission). They create randomly named temporary databases, test existing data upgrades, concurrent task/audio operations and database constraints, then drop only those temporary databases. They never migrate or drop the database named in the supplied URL. These checks are skipped by default.
 

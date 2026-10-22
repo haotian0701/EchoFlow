@@ -35,6 +35,15 @@ def home(article, script_id=None, **extra):
     return WEB_URL + "/?" + urlencode(params)
 
 
+def assert_navigation(page, expect, current):
+    nav = page.get_by_role("navigation", name="Main navigation")
+    expect(nav.get_by_role("link")).to_have_text(
+        ["▦Content", "♫Audio", "☷Jobs", "◫Dashboard"]
+    )
+    expect(nav.locator('[aria-current="page"]')).to_have_text(current)
+    expect(page.locator(".topbar")).not_to_contain_text("Stage")
+
+
 def approve_visible(page, expect):
     expect(page.locator(".evaluation-card .score-grid")).to_be_visible(timeout=20000)
     for checkbox in page.locator(".acknowledge input").all():
@@ -401,6 +410,7 @@ def test_unconfirmed_approval_blocks_synthesis_and_missing_timeline_keeps_result
         },
     )
     edited.raise_for_status()
+    page.locator(".production-options > summary").click()
     expect(generate).to_be_enabled()
     generate.click()
     expect(page.locator(".audio-production .source-tag")).to_have_text("Superseded")
@@ -411,3 +421,234 @@ def test_unconfirmed_approval_blocks_synthesis_and_missing_timeline_keeps_result
         ]
         == 1
     )
+
+
+def test_collapsible_article_input_source_and_labeled_navigation(
+    production, live_api, page
+):
+    page, expect = page
+    first, job = production.generate("ux-fold")
+    production.wait(job["id"])
+    second, job = production.generate("ux-fold")
+    production.wait(job["id"])
+    page.goto(WEB_URL + "/?q=ux-fold", wait_until="domcontentloaded")
+    entry = page.locator(".article-entry")
+    expect(entry).to_have_attribute("open", "")
+    page.get_by_label("Title", exact=True).fill("A retained title")
+    page.get_by_label("Article text", exact=False).fill("Retained input " * 12)
+    summary = entry.locator("summary").first
+    summary.focus()
+    page.keyboard.press("Enter")
+    expect(entry).not_to_have_attribute("open", "")
+    summary.press("Enter")
+    expect(page.get_by_label("Title", exact=True)).to_have_value("A retained title")
+    page.get_by_role("button", name=re.compile(re.escape(first["title"]))).click()
+    expect(entry).not_to_have_attribute("open", "")
+    original = page.locator(".original-article")
+    expect(original).not_to_have_attribute("open", "")
+    original.locator("summary").press("Enter")
+    expect(page.locator(".article-body")).to_be_visible()
+    page.get_by_role("button", name=re.compile(re.escape(second["title"]))).click()
+    expect(page.locator(".original-article")).not_to_have_attribute("open", "")
+    summary.click()
+    expect(page.get_by_label("Title", exact=True)).to_have_value("A retained title")
+    expect(page.get_by_label("Article text", exact=False)).to_have_value(
+        "Retained input " * 12
+    )
+    page.get_by_role("tab", name="Import URL", exact=True).click()
+    page.get_by_label("Article URL", exact=False).fill(
+        "https://example.com/controlled-failure"
+    )
+
+    def failed_import(route):
+        if route.request.method != "POST":
+            route.continue_()
+            return
+        route.fulfill(
+            status=422,
+            headers={"Access-Control-Allow-Origin": WEB_URL},
+            json={
+                "code": "E2E_IMPORT",
+                "message": "Paste the article instead.",
+                "details": {},
+                "request_id": "e2e",
+            },
+        )
+
+    page.route(API_URL + "/articles/import", failed_import)
+    page.get_by_role("button", name=re.compile("^Import article")).click()
+    expect(page.locator(".notice.error").first).to_contain_text(
+        "Paste the article instead"
+    )
+    expect(entry).to_have_attribute("open", "")
+    expect(page.get_by_label(re.compile("^Title"))).to_have_value("A retained title")
+    expect(page.get_by_label("Article URL", exact=False)).to_have_value(
+        "https://example.com/controlled-failure"
+    )
+    assert_navigation(page, expect, "▦Content")
+    page.set_viewport_size({"width": 390, "height": 844})
+    for label in ["Audio", "Jobs", "Dashboard", "Content"]:
+        page.get_by_role("navigation").get_by_role(
+            "link", name=label, exact=True
+        ).click()
+        expect(
+            page.get_by_role("navigation").get_by_role("link", name=label, exact=True)
+        ).to_be_in_viewport(ratio=1)
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    assert_navigation(page, expect, "▦Content")
+
+
+def test_review_filters_preserve_full_critical_approval_and_reset_on_new_report(
+    production, live_api, page
+):
+    page, expect = page
+    _, job = production.generate("ux-filter")
+    script_id = production.wait(job["id"])["result_script_version_id"]
+    script = live_api.get(f"/scripts/{script_id}").json()
+    edited = live_api.patch(
+        f"/scripts/{script_id}",
+        json={
+            "text": "A detailed account of the source evidence " * 12,
+            "expected_version": script["version"],
+        },
+    )
+    edited.raise_for_status()
+    script = edited.json()
+    evaluation_job = production.post(f"/scripts/{script['id']}/evaluate")["job"]
+    evaluation_id = production.wait(evaluation_job["id"])["result_evaluation_id"]
+    report = live_api.get(f"/evaluations/{evaluation_id}").json()
+    critical = [issue for issue in report["issues"] if issue["severity"] == "critical"]
+    assert len(critical) >= 2
+    # Keep genuine critical IDs so approval still uses the real server checks.
+    warning = {
+        **critical[0],
+        "id": "ui-warning",
+        "severity": "warning",
+        "title": "Presentation warning",
+        "script_start": 0,
+        "script_end": 10,
+    }
+    report["issues"] = [warning, *critical]
+    page.route(
+        API_URL + f"/evaluations/{evaluation_id}",
+        lambda route: route.fulfill(
+            headers={"Access-Control-Allow-Origin": WEB_URL}, json=report
+        ),
+    )
+    page.goto(WEB_URL + f"/review/{script['id']}", wait_until="domcontentloaded")
+    filters = page.get_by_role("group", name="Filter review issues")
+    expect(page.locator(".issue-row b")).to_have_text(
+        ["critical"] * len(critical) + ["warning"]
+    )
+    assert_navigation(page, expect, "▦Content")
+    page.locator(".issue-row.warning").click()
+    expect(page.locator('[aria-label="Script text"] mark')).to_have_count(1)
+    page.locator(".acknowledge input").first.check()
+    filters.get_by_role("button", name=re.compile("^Critical")).click()
+    expect(page.locator("mark")).to_have_count(0)
+    expect(page.locator(".issue-row")).to_have_count(len(critical))
+    filters.get_by_role("button", name=re.compile("^Info")).click()
+    expect(page.get_by_text("No info issues in this report.")).to_be_visible()
+    expect(page.locator(".acknowledge input").first).to_be_checked()
+    expect(page.get_by_role("button", name="Approve script")).to_be_disabled()
+    for checkbox in page.locator(".acknowledge input").all():
+        checkbox.check()
+    expect(page.get_by_role("button", name="Approve script")).to_be_enabled()
+    page.get_by_role("button", name="Approve script").click()
+    expect(page.locator(".review-status")).to_have_text("Approved")
+    # A different report resets the presentation filter as well as confirmations.
+    page.get_by_role("button", name="Re-evaluate", exact=True).click()
+    page.get_by_role("button", name="Start new evaluation", exact=True).click()
+    expect(page.locator(".review-status")).to_have_text("Pending review", timeout=20000)
+    expect(filters.get_by_role("button", name=re.compile("^All"))).to_have_attribute(
+        "aria-pressed", "true"
+    )
+    expect(page.locator(".acknowledge input").first).not_to_be_checked()
+    page.set_viewport_size({"width": 390, "height": 844})
+    filters.get_by_role("button", name=re.compile("^Critical")).focus()
+    page.keyboard.press("Enter")
+    expect(
+        filters.get_by_role("button", name=re.compile("^Critical"))
+    ).to_have_attribute("aria-pressed", "true")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+def test_recordings_first_manual_expansion_errors_and_historical_audio(
+    production, live_api, page, tmp_path
+):
+    page, expect = page
+    _, script = production.approved("ux-recordings-first")
+    job = production.wait(production.audio(script["id"])["id"])
+    page.goto(WEB_URL + f"/audio/{script['id']}", wait_until="domcontentloaded")
+    options = page.locator(".production-options")
+    expect(page.locator(".audio-item audio")).to_be_visible()
+    expect(options).not_to_have_attribute("open", "")
+    assert page.locator(".audio-library").evaluate(
+        "e => !!(e.compareDocumentPosition(document.querySelector('.audio-production')) & Node.DOCUMENT_POSITION_FOLLOWING)"
+    )
+    assert_navigation(page, expect, "♫Audio")
+    expect(page.locator(".task-events")).not_to_have_attribute("open", "")
+    options.locator("summary").first.focus()
+    page.keyboard.press("Enter")
+    expect(options).to_have_attribute("open", "")
+    page.get_by_label("Speed", exact=False).fill("1.1")
+    page.evaluate("window.dispatchEvent(new Event('focus'))")
+    expect(page.get_by_role("button", name="Generate audio")).to_be_enabled()
+    expect(options).to_have_attribute("open", "")
+    expect(page.get_by_label("Speed", exact=False)).to_have_value("1.1")
+
+    unavailable = [True]
+    deleting = [False]
+
+    def read_recordings(route):
+        if unavailable[0]:
+            route.abort("failed")
+        elif deleting[0]:
+            response = route.fetch()
+            data = response.json()
+            data["items"] = [{**asset, "status": "deleting"} for asset in data["items"]]
+            route.fulfill(response=response, json=data)
+        else:
+            route.continue_()
+
+    page.route(re.compile(re.escape(API_URL) + r"/audio\?"), read_recordings)
+    page.evaluate("window.dispatchEvent(new Event('focus'))")
+    expect(page.get_by_role("alert")).to_contain_text(
+        "Recordings could not be refreshed"
+    )
+    expect(page.locator(".audio-item audio")).to_be_visible()
+    expect(page.locator(".audio-job .job-heading strong")).to_have_text("succeeded")
+    unavailable[0] = False
+    page.get_by_role("button", name="Refresh recordings").click()
+    expect(page.get_by_role("alert")).to_have_count(0)
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.locator(".audio-item audio").evaluate("audio => audio.play()")
+    expect(page.locator(".audio-item audio")).to_have_js_property("paused", False)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=str(tmp_path / "recordings-mobile.png"), full_page=True)
+    deleting[0] = True
+    page.reload(wait_until="domcontentloaded")
+    expect(page.locator(".audio-item")).to_contain_text("Deletion is pending")
+    expect(page.locator(".audio-item audio")).to_have_count(0)
+    expect(options).to_have_attribute("open", "")
+    deleting[0] = False
+    edited = live_api.patch(
+        f"/scripts/{script['id']}",
+        json={
+            "text": script["text"] + "\nA later revision.",
+            "expected_version": script["version"],
+        },
+    )
+    edited.raise_for_status()
+    page.reload(wait_until="domcontentloaded")
+    expect(page.locator(".audio-production .source-tag")).to_have_text("Superseded")
+    expect(page.locator(".audio-item audio")).to_be_visible()
+    options.locator("summary").first.click()
+    expect(page.get_by_role("button", name="Generate audio")).to_be_disabled()
+    assert (
+        live_api.get(f"/jobs?script_id={script['id']}&type=audio_generation").json()[
+            "total"
+        ]
+        == 1
+    )
+    assert live_api.get(f"/jobs/{job['id']}").json()["result_audio_asset_id"]

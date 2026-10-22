@@ -26,3 +26,38 @@
 button:focus-visible,a:focus-visible{outline:2px solid #679477;outline-offset:4px}
 @media(max-width:650px){.job-stage{align-items:flex-start;flex-direction:column;gap:6px}.toolbar-actions .primary-button,.script-actions .primary-button{justify-content:center;white-space:normal;text-align:center}.dialog-actions>*{flex:1}.notice a{display:inline-flex;margin-top:8px}}
 @media(max-width:1000px){.content-grid{grid-template-columns:minmax(0,1fr)}}
+
+.app-navigation{width:148px;padding:0 12px}
+.app-navigation nav{display:flex;flex-direction:column;gap:8px;width:100%}
+.app-navigation .rail-icon{display:flex;justify-content:flex-start;gap:12px;width:100%;height:46px;padding:0 12px}
+.app-navigation .nav-label{font-size:12px;font-weight:600}
+.content-grid{align-items:start}
+.entry-card,.library-card{min-height:0}
+.article-entry>summary,.original-article>summary,.production-options>summary,.task-events>summary{cursor:pointer;color:#386248;font-size:13px;font-weight:700;line-height:1.6}
+.article-entry>summary{font-size:18px}
+.article-entry[open]>.card-heading{margin-top:22px}
+.original-article{margin-top:20px}
+.production-options{margin-top:20px}
+.production-options>summary{padding:10px 0}
+.task-events{margin-top:16px}
+summary:focus-visible{outline:2px solid #679477;outline-offset:4px;border-radius:3px}
+.issue-report{min-width:0}
+.issue-filters{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px}
+.issue-filters button{border:1px solid #d5dfd1;border-radius:16px;background:#fff;color:#526a57;font-size:12px;padding:8px 12px;min-height:36px}
+.issue-filters button[aria-pressed=true]{background:#294e3d;border-color:#294e3d;color:#fff}
+.issue-list{align-content:start}
+.result-audio{border-color:#679477;box-shadow:0 0 0 1px #679477}
+.audio-item h3,.audio-production h2{overflow-wrap:anywhere}
+.audio-result-link a{color:#386248;font-weight:700}
+.audio-library{scroll-margin-top:20px}
+@media(max-width:640px){
+  .app-shell{flex-direction:column}
+  .app-navigation{position:static;width:100%;height:auto;padding:8px 10px}
+  .app-navigation .brand-mark,.app-navigation .rail-divider{display:none}
+  .app-navigation nav{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}
+  .app-navigation .rail-icon{flex-direction:column;justify-content:center;gap:3px;height:58px;padding:5px 2px;font-size:19px}
+  .app-navigation .nav-label{font-size:11px}
+  .topbar{padding:0 16px}
+  .issue-filters{gap:6px}
+  .issue-filters button{font-size:11px;padding:8px 10px}
+}

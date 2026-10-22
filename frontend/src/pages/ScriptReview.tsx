@@ -1,3 +1,5 @@
+import { issueFilters, visibleIssues, type IssueFilter } from '../domain/issues'
+import AppNavigation from '../components/AppNavigation'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, ApiError, EvaluationIssue } from '../api'
@@ -32,6 +34,7 @@ export default function ScriptReview() {
   const scriptPane = useRef<HTMLDivElement>(null)
   const reportPane = useRef<HTMLElement>(null)
   const [historyId, setHistoryId] = useState<string | null>(null)
+  const [issueFilter, setIssueFilter] = useState<IssueFilter>('all')
   const [activeIssue, setActiveIssue] = useState<EvaluationIssue | null>(null)
   const [acknowledged, setAcknowledged] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState(false)
@@ -66,6 +69,7 @@ export default function ScriptReview() {
   const criticalIssues = evaluation?.issues.filter(issue => issue.severity === 'critical') || []
   const remainingCritical = criticalIssues.filter(issue => !acknowledged.has(issue.id)).length
   const canApprove = state === 'pending_review' && isLatestEvaluation && !editing && !remainingCritical
+  const filteredIssues = visibleIssues(evaluation?.issues || [], issueFilter)
   const issueCounts = { critical: criticalIssues.length, warning: evaluation?.issues.filter(issue => issue.severity === 'warning').length || 0 }
   const studio = script ? studioUrl(script.article_id, script.id, params.get('studio')) : '/'
   const thisPage = location.pathname + location.search
@@ -82,7 +86,7 @@ export default function ScriptReview() {
   }, [script])
   useEffect(() => {
     const id = evaluation?.id || ''
-    if (acknowledgedEvaluation.current !== id) { acknowledgedEvaluation.current = id; setAcknowledged(new Set()); setActiveIssue(null) }
+    if (acknowledgedEvaluation.current !== id) { acknowledgedEvaluation.current = id; setAcknowledged(new Set()); setActiveIssue(null); setIssueFilter('all') }
   }, [evaluation?.id])
   useEffect(() => {
     if (!dirty) return
@@ -154,19 +158,11 @@ export default function ScriptReview() {
     finally { mutation.current = false; setBusy(false) }
   }
   return <div className="app-shell review-shell">
-    <aside className="rail">
-      <Link className="brand-mark brand-link" to="/">E<span>◉</span></Link>
-      <div className="rail-divider" />
-      <Link className="rail-icon" title="Content Studio" aria-label="Content Studio" to="/">▦</Link>
-      <div className="rail-icon active" title="Script Review" aria-label="Script Review">✓</div>
-      <Link className="rail-icon" title="Job Monitor" aria-label="Job Monitor" to="/jobs">☷</Link><Link className="rail-icon" title="Dashboard" aria-label="Dashboard" to="/dashboard">◫</Link><div className="rail-spacer" />
-      <Link className="rail-icon" title="Audio Studio" aria-label="Audio Studio" to="/audio">♫</Link>
-      <div className="rail-bottom">03</div>
-    </aside>
+    <AppNavigation />
     <main className="main">
       <header className="topbar">
         <div className="brand-name">EchoFlow <span>/ Script Review</span></div>
-        <div className="stage-pill"><span className="stage-dot" /> Stage 03 · Review</div>
+        <div className="stage-pill"><span className="stage-dot" /> Script Review</div>
       </header>
       <div className="workspace review-workspace">
         <section className="review-title">
@@ -221,10 +217,18 @@ export default function ScriptReview() {
                 <div><span>Review flags</span><strong>{evaluation.issues.length}</strong><small>{issueCounts.critical} critical · {issueCounts.warning} warning</small></div>
               </div>
               <div className="report-layout">
+                <div className="issue-report">
+                  <div className="issue-filters" role="group" aria-label="Filter review issues">
+                    {issueFilters.map(filter => <button key={filter} type="button" aria-pressed={issueFilter === filter} onClick={() => {
+                      setIssueFilter(filter)
+                      if (activeIssue && filter !== 'all' && activeIssue.severity !== filter) setActiveIssue(null)
+                    }}>{filter === 'all' ? 'All' : filter[0].toUpperCase() + filter.slice(1)} ({filter === 'all' ? evaluation.issues.length : evaluation.issues.filter(issue => issue.severity === filter).length})</button>)}
+                  </div>
                 <div className="issue-list">
-                  {evaluation.issues.length === 0 ? <p className="clean-report">No review flags were found. Scores remain estimates.</p> : evaluation.issues.map(issue => <button type="button" key={issue.id} className={`issue-row ${issue.severity} ${activeIssue?.id === issue.id ? 'active' : ''}`} onClick={() => setActiveIssue(issue)}>
+                  {evaluation.issues.length === 0 ? <p className="clean-report">No review flags were found. Scores remain estimates.</p> : filteredIssues.length === 0 ? <p className="clean-report" role="status">No {issueFilter} issues in this report.</p> : filteredIssues.map(issue => <button type="button" key={issue.id} className={`issue-row ${issue.severity} ${activeIssue?.id === issue.id ? 'active' : ''}`} onClick={() => setActiveIssue(issue)}>
                     <span className="issue-top"><b>{issue.severity}</b><small>{issue.origin} · {issue.dimension.replaceAll('_', ' ')}</small></span><strong>{issue.title}</strong><p>{issue.explanation}</p><em>{issue.evidence_status === 'verified' ? 'Source evidence located' : issue.evidence_status === 'insufficient' ? 'Evidence could not be verified' : 'Source evidence not applicable'}</em>
                   </button>)}
+                </div>
                 </div>
                 <aside className="approval-panel">
                   <span className="job-label">HUMAN DECISION</span>

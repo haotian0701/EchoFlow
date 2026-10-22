@@ -1,3 +1,4 @@
+import AppNavigation from '../components/AppNavigation'
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, ApiError, GenerationConfig, Language, ProductionJob } from '../api'
@@ -29,6 +30,7 @@ export default function ContentStudio() {
   const route = useRef(''); route.current = articleId + ':' + requestedScript
   const mutation = useRef(false)
   const savedNotice = useRef<string | null>(null)
+  const [entryOpen, setEntryOpen] = useState(!articleId)
   const [mode, setMode] = useState<EntryMode>('manual')
   const [title, setTitle] = useState('')
   const [source, setSource] = useState('')
@@ -82,6 +84,7 @@ export default function ContentStudio() {
   const reviewStatuses = Object.fromEntries(scripts.map(item => [item.id, item.id === scripts[0]?.id ? (item.id === script?.id ? reviewLabels[state] : 'Open to check status') : 'Superseded']))
 
   useEffect(() => { setSearch(query) }, [query])
+  useEffect(() => { setEntryOpen(!articleId) }, [articleId])
   useEffect(() => { if (savedNotice.current !== articleId) setNotice(null); savedNotice.current = null; setAcceptedJob(null) }, [articleId])
   useEffect(() => { if (selected) setGenerationConfig(current => ({ ...current, target_language: selected.language })) }, [selected?.id])
   useEffect(() => { if (acceptedJob && production.data?.job?.id === acceptedJob.id) setAcceptedJob(null) }, [production.data, acceptedJob])
@@ -127,7 +130,7 @@ export default function ContentStudio() {
   }
 
   function selectScript(id: string) { patchUrl({ scriptId: id, section: 'production' }) }
-  function selectArticle(id: string) { patchUrl({ articleId: id, scriptId: null, section: 'production' }) }
+  function selectArticle(id: string) { setEntryOpen(false); patchUrl({ articleId: id, scriptId: null, section: 'production' }) }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -135,12 +138,14 @@ export default function ContentStudio() {
     setBusy(true); setNotice(null)
     try {
       const result = mode === 'manual' ? await api.create({ title, text, source, language }) : await api.import({ url, title: title || undefined, source: source || undefined, language })
+      setEntryOpen(false)
       savedNotice.current = result.article.id
       patchUrl({ articleId: result.article.id, scriptId: null, section: 'production', offset: '0', importOffset: '0' })
       setNotice({ kind: 'success', text: result.duplicate ? 'This content already exists. The saved article is open.' : 'Article saved. Configure your audio script below.' })
       setTitle(''); setSource(''); setText(''); setUrl('')
       library.refresh(); article.refresh(); production.refresh()
     } catch (error) {
+      setEntryOpen(true)
       const message = error instanceof ApiError ? error.body.message : error instanceof Error ? error.message : 'The request failed.'
       setNotice({ kind: 'error', text: mode === 'url' ? `${message} You can paste the article text instead.` : message })
       if (mode === 'url') library.refresh()
@@ -156,19 +161,12 @@ export default function ContentStudio() {
 
   return (
     <div className="app-shell">
-      <aside className="rail">
-        <div className="brand-mark">E<span>◉</span></div>
-        <div className="rail-divider" />
-        <div className="rail-icon active" title="Content Studio" aria-label="Content Studio">▦</div>
-        <Link className="rail-icon" title="Job Monitor" aria-label="Job Monitor" to="/jobs">☷</Link><Link className="rail-icon" title="Dashboard" aria-label="Dashboard" to="/dashboard">◫</Link><div className="rail-spacer" />
-        <Link className="rail-icon" title="Audio Studio" aria-label="Audio Studio" to="/audio">♫</Link>
-        <div className="rail-bottom">01</div>
-      </aside>
+      <AppNavigation />
 
       <main className="main">
         <header className="topbar">
           <div className="brand-name">EchoFlow <span>/ Content Studio</span></div>
-          <div className="stage-pill"><span className="stage-dot" /> Stage 01 · Content</div>
+          <div className="stage-pill"><span className="stage-dot" /> Content Studio</div>
         </header>
 
         <div className="workspace">
@@ -183,10 +181,12 @@ export default function ContentStudio() {
 
           <div className="content-grid">
             <section className="card entry-card">
+              <details className="article-entry" open={entryOpen} onToggle={event => { if (event.currentTarget.open !== entryOpen) setEntryOpen(event.currentTarget.open) }}>
+              <summary>Add an article</summary>
               <div className="card-heading">
                 <div>
                   <p className="section-number">01 / INPUT</p>
-                  <h2>Add an article</h2>
+                  <h2>Article input</h2>
                 </div>
                 <div className="mode-switch" role="tablist" aria-label="Input method">
                   <button type="button" role="tab" aria-selected={mode === 'manual'} className={mode === 'manual' ? 'selected' : ''} onClick={() => setMode('manual')}>Paste text</button>
@@ -205,6 +205,7 @@ export default function ContentStudio() {
                   <button className="primary-button" type="submit" disabled={busy}>{busy ? 'Working…' : mode === 'url' ? 'Import article ↗' : 'Save article ↗'}</button>
                 </div>
               </form>
+              </details>
             </section>
 
             <section className="card library-card">
@@ -241,7 +242,7 @@ export default function ContentStudio() {
             <div className="card-heading"><div><p className="section-number">03 / SOURCE RECORD</p><h2>Article details</h2></div>{selected && <span className="source-tag">{selected.import_type === 'url' ? 'URL import' : 'Manual entry'}</span>}</div>
             {selected ? <div className="article-detail">
               <div className="detail-header"><h3>{selected.title}</h3><p>{selected.source} · {selected.language === 'en' ? 'English' : 'German'} · Saved {dateTime(selected.created_at)}</p>{selected.source_url && <a href={selected.source_url} target="_blank" rel="noreferrer">View original source ↗</a>}</div>
-              <div className="article-body">{selected.original_text}</div>
+              <details key={selected.id} className="original-article"><summary>Read original article</summary><div className="article-body">{selected.original_text}</div></details>
             </div> : <p className="detail-placeholder">Select a saved article to read its original text here.</p>}
           </section>
 
