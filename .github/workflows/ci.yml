@@ -102,6 +102,8 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Type-check and build
         run: npm run build
+      - name: Run frontend unit tests
+        run: npm test
       - name: Upload production build
         uses: actions/upload-artifact@v7
         with:

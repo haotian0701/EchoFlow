@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, type JobEvent, type JobExecution, type Page, type ProductionJob, type ProviderCall } from '../api'
+import { jobUrl, safeReturn, studioUrl } from '../domain/navigation'
 import MonitorShell, { activeJob, displayTime, label } from '../components/MonitorShell'
 
 const emptyPage = <T,>(): Page<T> => ({items: [], total: 0, limit: 20, offset: 0})
@@ -57,6 +58,7 @@ export function Pager({page, onChange}: {page: {total:number;offset:number;limit
 
 function JobDetail({id}: {id:string}) {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [job, setJob] = useState<ProductionJob | null>(null)
   const [executions, setExecutions] = useState(emptyPage<JobExecution>())
   const [calls, setCalls] = useState(emptyPage<ProviderCall>())
@@ -85,21 +87,23 @@ function JobDetail({id}: {id:string}) {
     void load()
     return () => {cancelled = true;clearTimeout(timer)}
   }, [id, offsets])
+  const returnTo = safeReturn(searchParams.get('returnTo'), job ? studioUrl(job.article_id, job.source_script_version_id || job.result_script_version_id || undefined) : '/')
   async function retry() {
     setBusy(true);setError('')
-    try {const result = await api.retryJob(id,ack,retryKey.current);navigate(`/jobs/${result.job.id}`)}
+    try {const result = await api.retryJob(id,ack,retryKey.current);navigate(jobUrl(result.job.id, returnTo))}
     catch (caught) {setError(caught instanceof Error ? caught.message : 'Retry failed')}
     finally {setBusy(false)}
   }
   return <>
     <section className="review-title"><div><p className="eyebrow">EXECUTION RECORD</p><h1>Behind the<br /><em>result.</em></h1></div><Link className="secondary-button review-link" to="/jobs">All jobs</Link></section>
+    <Link className="back-link" to={returnTo}>← Back to this article</Link>
     {error && <div className="notice error" role="alert">{error}</div>}
     {!job ? <p>Loading job…</p> : <>
       <section className="card monitor-card"><div className="monitor-detail-heading"><div><h2>{label(job.job_type)}</h2><p>{job.article_title}</p><code>{job.id}</code></div><span className={`monitor-badge ${job.status}`}>{label(job.status)}</span></div>
         <div className="monitor-facts"><p>Stage <strong>{label(job.stage)}</strong></p><p>Attempts <strong>{job.attempt_count} / {job.max_attempts}</strong></p><p>Started <strong>{displayTime(job.started_at)}</strong></p><p>Completed <strong>{displayTime(job.completed_at)}</strong></p></div>
         {job.error_message && <div className="notice error"><strong>{job.error_code}</strong><p>{job.error_message}</p></div>}
         <div className="monitor-links"><Link to="/">Content Studio</Link>{job.source_script_version_id && <Link to={`/review/${job.source_script_version_id}`}>Source script</Link>}{job.result_script_version_id && <Link to={`/review/${job.result_script_version_id}`}>Result script ↗</Link>}{job.result_evaluation_id && <Link to={`/review/${job.source_script_version_id}`}>Evaluation report ↗</Link>}{job.result_audio_asset_id && <Link to={`/audio/${job.source_script_version_id}`}>Result audio ↗</Link>}</div>
-        <div className="monitor-chain"><strong>Retry history</strong>{job.root_job_id && job.root_job_id !== id && <Link to={`/jobs/${job.root_job_id}`}>Root job</Link>}{job.retry_of_job_id && <Link to={`/jobs/${job.retry_of_job_id}`}>← Parent job</Link>}<span>Current job</span>{job.retry_child_job_id && <Link to={`/jobs/${job.retry_child_job_id}`}>Retry child →</Link>}</div>
+        <div className="monitor-chain"><strong>Retry history</strong>{job.root_job_id && job.root_job_id !== id && <Link to={jobUrl(job.root_job_id, returnTo)}>Root job</Link>}{job.retry_of_job_id && <Link to={jobUrl(job.retry_of_job_id, returnTo)}>← Parent job</Link>}<span>Current job</span>{job.retry_child_job_id && <Link to={jobUrl(job.retry_child_job_id, returnTo)}>Retry child →</Link>}</div>
         {job.can_retry && <div className="monitor-retry"><h3>{job.retry_mode === 'resume_upload' ? 'Recover saved audio' : 'Retry with a new provider call'}</h3><p>{job.retry_mode === 'resume_upload' ? 'The existing synthesis and its approval will be reused. No new TTS call is made.' : 'A new linked job will use the current server provider configuration. Correct configuration errors before retrying.'}</p>
           {job.recovery_expires_at && <p>Saved audio recovery deadline: {displayTime(job.recovery_expires_at)}</p>}
           {job.requires_charge_acknowledgement && <label className="monitor-ack"><input type="checkbox" checked={ack} onChange={e => {setAck(e.target.checked);retryKey.current=crypto.randomUUID()}} />I understand the previous call may have been charged and a new call may incur another charge.</label>}
